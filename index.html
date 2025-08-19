@@ -87,86 +87,7 @@
                             // App access control
          const [isAppUnlocked, setIsAppUnlocked] = useState(false)
          const [showAppLogin, setShowAppLogin] = useState(true)
-         const [showPermissionRequest, setShowPermissionRequest] = useState(true)
          const [appPassword, setAppPassword] = useState('')
-         const [permissionGranted, setPermissionGranted] = useState(false)
-         
-         // Generate unique device-based password
-         const generateDevicePassword = () => {
-           try {
-             // Get device characteristics
-             const screenInfo = `${screen.width}x${screen.height}`
-             const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-             const language = navigator.language
-             const userAgent = navigator.userAgent
-             
-             // Create unique device fingerprint
-             const deviceFingerprint = `${screenInfo}-${timezone}-${language}-${userAgent}`
-             
-             // Generate hash-based password (simple but effective)
-             let hash = 0
-             for (let i = 0; i < deviceFingerprint.length; i++) {
-               const char = deviceFingerprint.charCodeAt(i)
-               hash = ((hash << 5) - hash) + char
-               hash = hash & hash // Convert to 32-bit integer
-             }
-             
-             // Convert to 4-digit password (0000-9999)
-             const password = Math.abs(hash) % 10000
-             return password.toString().padStart(4, '0')
-           } catch (error) {
-             // Fallback to a random password if device detection fails
-             return Math.floor(1000 + Math.random() * 9000).toString()
-           }
-         }
-         
-         // Get the unique password for this device
-         const devicePassword = useMemo(() => generateDevicePassword(), [])
-         
-         // Check if this device has permission (stored in localStorage)
-         const checkDevicePermission = () => {
-           const deviceId = devicePassword
-           const permittedDevices = JSON.parse(localStorage.getItem('permittedDevices') || '[]')
-           return permittedDevices.includes(deviceId)
-         }
-         
-         // Grant permission to this device
-         const grantDevicePermission = () => {
-           const deviceId = devicePassword
-           const permittedDevices = JSON.parse(localStorage.getItem('permittedDevices') || '[]')
-           if (!permittedDevices.includes(deviceId)) {
-             permittedDevices.push(deviceId)
-             localStorage.setItem('permittedDevices', JSON.stringify(permittedDevices))
-           }
-           setPermissionGranted(true)
-           setShowPermissionRequest(false)
-         }
-         
-         // Revoke permission from this device
-         const revokeDevicePermission = () => {
-           const deviceId = devicePassword
-           const permittedDevices = JSON.parse(localStorage.getItem('permittedDevices') || '[]')
-           const updatedDevices = permittedDevices.filter(id => id !== deviceId)
-           localStorage.setItem('permittedDevices', JSON.stringify(updatedDevices))
-           setPermissionGranted(false)
-           setShowPermissionRequest(true)
-           setShowAppLogin(false)
-           setIsAppUnlocked(false)
-         }
-         
-         // Check permission on app load
-         useEffect(() => {
-           if (checkDevicePermission()) {
-             setPermissionGranted(true)
-             setShowPermissionRequest(false)
-           } else {
-             // If no permission, show permission request and hide password modal
-             setPermissionGranted(false)
-             setShowPermissionRequest(true)
-             setShowAppLogin(false)
-             setIsAppUnlocked(false)
-           }
-         }, [])
          
          // Admin mode
          const [isAdminMode, setIsAdminMode] = useState(false)
@@ -602,39 +523,33 @@
             }
           }
           
-                             // App access functions
-          function handleAppUnlock() {
-            if (appPassword === devicePassword) {
-              setIsAppUnlocked(true)
-              setShowAppLogin(false)
-              setAppPassword('')
-            } else {
-              alert(lang === 'he' 
-                ? `סיסמה שגויה! הסיסמה הייחודית למכשיר זה היא: ${devicePassword}` 
-                : `Incorrect password! The unique password for this device is: ${devicePassword}`
-              )
-              setAppPassword('')
-            }
-          }
+                   // App access functions
+         function handleAppUnlock() {
+           if (appPassword === '1234') {
+             setIsAppUnlocked(true)
+             setShowAppLogin(false)
+             setAppPassword('')
+           } else {
+             alert('Incorrect password!')
+             setAppPassword('')
+           }
+         }
          
-                   // Admin functions
-          function handleAdminAccess() {
-            if (adminPassword === devicePassword) {
-              // Set the admin mode based on what was requested
-              if (requestedAdminMode) {
-                setIsAdminMode(requestedAdminMode)
-                setRequestedAdminMode(null)
-              }
-              setShowAdminLogin(false)
-              setAdminPassword('')
-            } else {
-              alert(lang === 'he' 
-                ? `סיסמת מנהל שגויה! הסיסמה הייחודית למכשיר זה היא: ${devicePassword}` 
-                : `Incorrect admin password! The unique password for this device is: ${devicePassword}`
-              )
-              setAdminPassword('')
-            }
-          }
+         // Admin functions
+         function handleAdminAccess() {
+           if (adminPassword === '1234') {
+             // Set the admin mode based on what was requested
+             if (requestedAdminMode) {
+               setIsAdminMode(requestedAdminMode)
+               setRequestedAdminMode(null)
+             }
+             setShowAdminLogin(false)
+             setAdminPassword('')
+           } else {
+             alert('Incorrect password!')
+             setAdminPassword('')
+           }
+         }
          
          function exitAdmin() {
            setIsAdminMode(false)
@@ -959,69 +874,9 @@
          }
         
         return (
-                      <div className="max-w-7xl mx-auto p-6">
-              {/* Permission Request Modal - Show when no permission */}
-              {showPermissionRequest && !permissionGranted && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                  <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-[500px] max-w-[95vw]">
-                    {/* Permission Request */}
-                    <h2 className="text-2xl font-bold text-slate-100 mb-6 text-center">🔒 {lang === 'he' ? 'בקשת הרשאה' : 'Permission Request'}</h2>
-                    
-                    <div className="text-center mb-6">
-                      <div className="text-slate-300 mb-4">
-                        {lang === 'he' 
-                          ? 'אפליקציה זו מוגנת על ידי מערכת הרשאות. ללא הרשאה מבעל האפליקציה, לא ניתן לגשת אליה או לראות את הסיסמה.'
-                          : 'This application is protected by a permission system. Without permission from the app owner, you cannot access it or see the password.'
-                        }
-                      </div>
-                      
-                      <div className="bg-slate-700/40 border border-slate-600 rounded-lg p-4 mb-4">
-                        <div className="text-sm text-slate-400 mb-2">
-                          {lang === 'he' ? 'מזהה מכשיר ייחודי:' : 'Unique Device ID:'}
-                        </div>
-                        <div className="text-lg font-mono text-emerald-400">
-                          {devicePassword}
-                        </div>
-                        <div className="text-xs text-slate-500 mt-2">
-                          {lang === 'he' 
-                            ? 'שלח מזהה זה לבעל האפליקציה לקבלת הרשאה'
-                            : 'Send this ID to the app owner for permission'
-                          }
-                        </div>
-                      </div>
-                      
-                      <div className="text-sm text-slate-400">
-                        {lang === 'he' 
-                          ? 'לאחר קבלת הרשאה, תוכל לגשת לאפליקציה באמצעות סיסמה ייחודית למכשיר זה.'
-                          : 'After receiving permission, you can access the app using a unique password for this device.'
-                        }
-                      </div>
-                    </div>
-                    
-                    {/* Action Buttons */}
-                    <div className="flex gap-3 justify-center">
-                      <button
-                        className="px-6 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors"
-                        onClick={grantDevicePermission}
-                      >
-                        ✅ {lang === 'he' ? 'אני בעל האפליקציה' : 'I am the App Owner'}
-                      </button>
-                      <button
-                        className="px-6 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
-                        onClick={() => {
-                          setShowPermissionRequest(false)
-                          setShowAppLogin(false)
-                        }}
-                      >
-                        ❌ {lang === 'he' ? 'סגור' : 'Close'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              {/* App Password Modal */}
-              {showAppLogin && permissionGranted && (
+          <div className="max-w-7xl mx-auto p-6">
+             {/* App Password Modal */}
+             {showAppLogin && (
                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                  <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-[500px] max-w-[95vw]">
                    {/* Welcome Message */}
@@ -1162,25 +1017,9 @@
                                                     placeholder={t.enterPassword}
                            onKeyPress={(e) => e.key === 'Enter' && handleAppUnlock()}
                            autoFocus
-                                                />
-                       
-                        {/* Device Password Display */}
-                        <div className="mt-3 p-3 bg-slate-700/40 border border-slate-600 rounded-lg">
-                          <div className="text-xs text-slate-400 mb-1">
-                            {lang === 'he' ? 'סיסמה ייחודית למכשיר זה:' : 'Unique password for this device:'}
-                          </div>
-                          <div className="text-lg font-mono text-emerald-400 text-center">
-                            {devicePassword}
-                          </div>
-                          <div className="text-xs text-slate-500 mt-2 text-center">
-                            {lang === 'he' 
-                              ? 'סיסמה זו תקפה רק במכשיר זה' 
-                              : 'This password only works on this device'
-                            }
-                          </div>
-                        </div>
-                      </div>
-                      {/* Action Buttons */}
+                       />
+                     </div>
+                     {/* Action Buttons */}
                      <div className="flex gap-3">
                        <button
                          className="flex-1 px-4 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
@@ -1206,8 +1045,8 @@
              {/* Audio placeholder - using Web Audio API instead */}
              <div ref={audioRef} style={{display: 'none'}}></div>
              
-                           {/* App Content - Only show when unlocked AND permission granted */}
-              {isAppUnlocked && permissionGranted && (
+             {/* App Content - Only show when unlocked */}
+             {isAppUnlocked && (
                <>
                                 {/* Instructions Banner */}
                <div className="bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 rounded-xl p-4 mb-6">
@@ -1261,22 +1100,13 @@
                   >
                     {isFullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen'}
                  </button>
-                                    <button
-                     className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
-                     onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
-                   >
-                     {lang === 'he' ? 'English' : 'עברית'}
-                   </button>
-                   
-                   {/* Revoke Permission Button (for app owner) */}
-                   <button
-                     className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
-                     onClick={revokeDevicePermission}
-                     title={lang === 'he' ? 'בטל הרשאה למכשיר זה' : 'Revoke permission for this device'}
-                   >
-                     🚫 {lang === 'he' ? 'בטל הרשאה' : 'Revoke Access'}
-                   </button>
-                 </div>
+                 <button
+                   className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                   onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
+                 >
+                   {lang === 'he' ? 'English' : 'עברית'}
+                 </button>
+               </div>
                           </div>
 
              {/* Admin Password Modal */}
