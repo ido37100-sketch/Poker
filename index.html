@@ -1,0 +1,2017 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Poker Tournament Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root { color-scheme: dark; }
+      body { background-color: rgb(15 23 42); color: rgb(226 232 240); }
+       
+       /* Fix for Spotify iframe white background */
+       iframe {
+         background: transparent !important;
+         border: none !important;
+         outline: none !important;
+       }
+       
+               /* Ensure no white backgrounds in the widget */
+        .spotify-widget iframe,
+        .spotify-widget * {
+          background: transparent !important;
+        }
+        
+        /* Force iframe to fill container completely */
+        .spotify-widget iframe {
+          min-height: 100% !important;
+          height: 100% !important;
+          background: transparent !important;
+        }
+        
+        /* Remove any default margins/padding that might cause gaps */
+        .spotify-widget {
+          overflow: hidden;
+        }
+    </style>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="min-h-screen">
+    <div id="root"></div>
+    
+
+
+    <script type="text/babel" data-presets="react">
+      const { useEffect, useMemo, useRef, useState } = React
+
+             function App() {
+         // Core tournament state
+         const [isRunning, setIsRunning] = useState(false)
+         const [currentLevelIndex, setCurrentLevelIndex] = useState(0)
+         const [remainingSeconds, setRemainingSeconds] = useState(600) // 10 minutes default
+         const [minutesPerLevel, setMinutesPerLevel] = useState(10)
+         const [timeFormat, setTimeFormat] = useState('minutes') // 'minutes' or 'mmss'
+         const [timePerLevelMMSS, setTimePerLevelMMSS] = useState('10:00') // MM:SS format
+         const [soundEnabled, setSoundEnabled] = useState(true)
+         
+         // Tournament timing
+         const [elapsedSeconds, setElapsedSeconds] = useState(0)
+         const [breakSeconds, setBreakSeconds] = useState(0)
+         const [isOnBreak, setIsOnBreak] = useState(false)
+         const [autoBreakMinutes, setAutoBreakMinutes] = useState(0)
+          const [addonSeconds, setAddonSeconds] = useState(0)
+         
+         // Player management
+         const [numPlayers, setNumPlayers] = useState(6)
+         const [players, setPlayers] = useState(() => 
+           Array.from({ length: 6 }, (_, i) => ({ 
+             id: i + 1, 
+             name: `שחקן ${i + 1}` 
+           }))
+         )
+         const [eliminatedIds, setEliminatedIds] = useState([])
+         const [rebuyCounts, setRebuyCounts] = useState({})
+         
+         // Blind levels
+         const [levels, setLevels] = useState([
+           { level: 1, smallBlind: 25, bigBlind: 50 },
+           { level: 2, smallBlind: 50, bigBlind: 100 },
+           { level: 3, smallBlind: 75, bigBlind: 150 },
+           { level: 4, smallBlind: 100, bigBlind: 200 },
+           { level: 5, smallBlind: 150, bigBlind: 300 },
+           { level: 6, smallBlind: 200, bigBlind: 400 }
+         ])
+         
+                            // App access control
+         const [isAppUnlocked, setIsAppUnlocked] = useState(false)
+         const [showAppLogin, setShowAppLogin] = useState(true)
+         const [appPassword, setAppPassword] = useState('')
+         
+         // Admin mode
+         const [isAdminMode, setIsAdminMode] = useState(false)
+         const [showAdminLogin, setShowAdminLogin] = useState(false)
+         const [adminPassword, setAdminPassword] = useState('')
+         const [requestedAdminMode, setRequestedAdminMode] = useState(null)
+          
+          // Tournament settings
+          const [maxRebuys, setMaxRebuys] = useState(3)
+          const [addonTime, setAddonTime] = useState('')
+          const [numWinners, setNumWinners] = useState(3)
+         
+         // Prize calculator
+         const [prizePool, setPrizePool] = useState(1000)
+         const [ratioInput, setRatioInput] = useState('50/30/20')
+         
+         // Spotify
+         const [spotifyUrl, setSpotifyUrl] = useState('')
+         const [currentTrack, setCurrentTrack] = useState(null)
+         
+         // Language
+         const [lang, setLang] = useState('he')
+          
+          // Fullscreen state
+          const [isFullscreen, setIsFullscreen] = useState(false)
+         
+         // Timer refs
+         const intervalRef = useRef(null)
+         const breakIntervalRef = useRef(null)
+         const elapsedIntervalRef = useRef(null)
+         const audioRef = useRef(null)
+         
+                   // Load saved game state on component mount
+         useEffect(() => {
+            const savedState = localStorage.getItem('pokerTournamentState')
+            if (savedState) {
+              try {
+                const gameState = JSON.parse(savedState)
+                
+                // Restore all the important game state
+                // Always require password on app startup for security
+                setIsAppUnlocked(false)
+                setShowAppLogin(true)
+                setIsRunning(gameState.isRunning || false)
+                setCurrentLevelIndex(gameState.currentLevelIndex || 0)
+                setRemainingSeconds(gameState.remainingSeconds || 600)
+                setMinutesPerLevel(gameState.minutesPerLevel || 10)
+                setTimeFormat(gameState.timeFormat || 'minutes')
+                setTimePerLevelMMSS(gameState.timePerLevelMMSS || '10:00')
+                setElapsedSeconds(gameState.elapsedSeconds || 0)
+                setBreakSeconds(gameState.breakSeconds || 0)
+                setIsOnBreak(gameState.isOnBreak || false)
+                setAutoBreakMinutes(gameState.autoBreakMinutes || 0)
+                setNumPlayers(gameState.numPlayers || 6)
+                
+                // Restore players with their exact saved data
+                if (gameState.players && gameState.players.length > 0) {
+                  setPlayers(gameState.players)
+                }
+                
+                setEliminatedIds(gameState.eliminatedIds || [])
+                setRebuyCounts(gameState.rebuyCounts || {})
+                setLevels(gameState.levels || [
+                  { level: 1, smallBlind: 25, bigBlind: 50 },
+                  { level: 2, smallBlind: 50, bigBlind: 100 },
+                  { level: 3, smallBlind: 75, bigBlind: 150 },
+                  { level: 4, smallBlind: 100, bigBlind: 200 },
+                  { level: 5, smallBlind: 150, bigBlind: 300 },
+                  { level: 6, smallBlind: 200, bigBlind: 400 }
+                ])
+                setMaxRebuys(gameState.maxRebuys || 3)
+                setNumWinners(gameState.numWinners || 3)
+                setAddonTime(gameState.addonTime || '')
+                setPrizePool(gameState.prizePool || 1000)
+                setRatioInput(gameState.ratioInput || '50/30/20')
+                setSpotifyUrl(gameState.spotifyUrl || '')
+                setCurrentTrack(gameState.currentTrack || null)
+                
+                console.log('🎮 Game state restored successfully!')
+              } catch (error) {
+                console.error('❌ Error restoring game state:', error)
+                localStorage.removeItem('pokerTournamentState')
+              }
+            }
+         }, [])
+          
+
+         
+         // Current level
+         const currentLevel = levels[currentLevelIndex]
+         
+         // Language dictionary
+         const dict = useMemo(() => ({
+           he: {
+             title: 'ניהול פוקר',
+             tableTitle: 'שולחן ושחקנים',
+             tournamentTitle: 'ניהול טורניר',
+             playersCount: 'מספר שחקנים:',
+             randomSeating: 'סידור אקראי',
+             seat: 'מושב',
+             playerPlaceholder: (n) => `שחקן ${n}`,
+             currentLevel: 'רמה נוכחית',
+             nextLevel: 'רמה הבאה:',
+             timer: 'טיימר',
+             levelTime: 'זמן לשלב:',
+             minutes: 'דקות',
+             mmss: 'דקות:שניות',
+             sound: 'צליל',
+             smallBlind: 'Small Blind',
+             bigBlind: 'Big Blind',
+             breakTimer: 'טיימר הפסקה',
+             totalTime: 'סה"כ זמן',
+             automaticBreak: 'הפסקה אוטומטית כל (דקות)',
+             off: 'כבוי',
+             addonIn: 'Addon בעוד ',
+             levelsTitle: 'ניהול רמות בליינדים',
+             level: 'רמה',
+             addLevel: 'הוסף רמה',
+             resetDefaults: 'איפוס לברירות מחדל',
+             exitAdmin: 'יציאה מניהול',
+             tournamentSettings: 'הגדרות טורניר',
+             maxRebuys: 'מקסימום Rebuys',
+             addonTime: 'שעת Addon ',
+             numWinners: 'מספר מנצחים',
+             prizeCalculator: 'מחשבון פרסים',
+             prizePool: 'סכום פרסים כולל',
+             ratioLabel: 'יחס חלוקה (למשל 50/30/20)',
+             firstPlace: 'מקום ראשון',
+             secondPlace: 'מקום שני',
+             thirdPlace: 'מקום שלישי',
+             howToUse: 'איך להשתמש באפליקציה',
+             tournamentTab: 'כרטיס טורניר',
+             tournamentTabDesc1: '• ניהול שחקנים, טיימרים והתקדמות המשחק',
+             tournamentTabDesc2: '• הגדרת רמות בליינדים ומעקב אחר חיסולים',
+             tournamentTabDesc3: '• שליטה בהפסקות והגדרות הפסקה אוטומטית',
+             prizeCalculator: 'מחשבון פרסים',
+             prizeCalculatorDesc1: '• חישוב חלוקת פרסים',
+             prizeCalculatorDesc2: '• הגדרת יחסים מותאמים לכל מספר מנצחים',
+             prizeCalculatorDesc3: '• אין צורך בסיסמה - גישה ציבורית',
+             adminSettings: 'הגדרות מנהל',
+             adminSettingsDesc1: '• הגדרת חוקי הטורניר',
+             adminSettingsDesc2: '• הגדרת מקסימום rebuys ושעת addon',
+             adminSettingsDesc3: '• גישה מוגבלת למנהלים בלבד',
+             newGame: 'משחק חדש',
+             newGameDesc1: '• איפוס הכל לטורנירים חדשים',
+             newGameDesc2: '• מצב מסך מלא לתצוגה טובה יותר',
+             newGameDesc3: '• שמירה אוטומטית של התקדמות',
+             appPassword: 'סיסמת אפליקציה',
+             enterPassword: 'הכנס סיסמה',
+             unlock: 'פתח',
+             cancel: 'ביטול',
+             welcomeMessage: 'ברוכים הבאים למנהל טורניר פוקר',
+             chooseLanguage: 'בחר שפה',
+             continueLastGame: 'המשך משחק אחרון',
+             startNewGame: 'משחק חדש',
+             noSavedGame: 'לא נמצא משחק שמור',
+             savedGameInfo: 'נמצא משחק שמור מ',
+             savedGameDetails: 'שחקנים, רמה'
+           },
+           en: {
+             title: 'Poker Management',
+             tableTitle: 'Table & Players',
+             tournamentTitle: 'Tournament Management',
+             playersCount: 'Players:',
+             randomSeating: 'Random Seating',
+             seat: 'Seat',
+             playerPlaceholder: (n) => `Player ${n}`,
+             currentLevel: 'Current Level',
+             nextLevel: 'Next Level:',
+             timer: 'Timer',
+             levelTime: 'Time per level:',
+             minutes: 'Minutes',
+             mmss: 'MM:SS',
+             sound: 'Sound',
+             smallBlind: 'Small Blind',
+             bigBlind: 'Big Blind',
+             breakTimer: 'Break Timer',
+             totalTime: 'Total Time',
+             automaticBreak: 'Auto-break every (minutes)',
+             off: 'Off',
+              addonIn: 'Addon in',
+             levelsTitle: 'Blind Levels Management',
+             level: 'Level',
+             addLevel: 'Add Level',
+             resetDefaults: 'Reset to Defaults',
+             exitAdmin: 'Exit Admin',
+              tournamentSettings: 'Tournament Settings',
+              maxRebuys: 'Max Rebuys',
+              addonTime: 'Addon Time (HH:MM)',
+              numWinners: 'Number of Winners',
+             prizeCalculator: 'Prize Calculator',
+             prizePool: 'Total Prize Pool',
+             ratioLabel: 'Distribution Ratio (e.g., 50/30/20)',
+             firstPlace: '1st Place',
+             secondPlace: '2nd Place',
+              thirdPlace: '3rd Place',
+             howToUse: 'How to Use This App',
+             tournamentTab: 'Tournament Tab',
+             tournamentTabDesc1: '• Manage players, timers, and game progress',
+             tournamentTabDesc2: '• Set blind levels and track eliminations',
+             tournamentTabDesc3: '• Control breaks and auto-break settings',
+             prizeCalculator: 'Prize Calculator',
+             prizeCalculatorDesc1: '• Calculate prize distributions',
+             prizeCalculatorDesc2: '• Set custom ratios for any number of winners',
+             prizeCalculatorDesc3: '• No password required - public access',
+             adminSettings: 'Admin Settings',
+             adminSettingsDesc1: '• Configure tournament rules',
+             adminSettingsDesc2: '• Set max rebuys and addon time',
+             adminSettingsDesc3: '• Restricted access for administrators only',
+             newGame: 'New Game',
+             newGameDesc1: '• Reset everything for fresh tournaments',
+             newGameDesc2: '• Fullscreen mode for better visibility',
+             newGameDesc3: '• Auto-saves progress automatically',
+             appPassword: 'App Password',
+             enterPassword: 'Enter Password',
+             unlock: 'Unlock',
+             cancel: 'Cancel',
+             welcomeMessage: 'Welcome to Poker Tournament Manager',
+             chooseLanguage: 'Choose Language',
+             continueLastGame: 'Continue Last Game',
+             startNewGame: 'Start New Game',
+             noSavedGame: 'No saved game found',
+             savedGameInfo: 'Saved game found from',
+             savedGameDetails: 'players, level'
+           }
+         }), [])
+         
+         const t = dict[lang]
+        
+                 // Helper function to get time per level in seconds
+         function getTimePerLevelInSeconds() {
+           if (timeFormat === 'minutes') {
+             return minutesPerLevel * 60
+           } else {
+             // Parse MM:SS format
+             const [minutes, seconds] = timePerLevelMMSS.split(':').map(Number)
+             return (minutes * 60) + (seconds || 0)
+           }
+         }
+        
+                 // Functions
+         function handleStartPause() {
+           setIsRunning(!isRunning)
+         }
+         
+         function handleReset() {
+           setIsRunning(false)
+            // Don't reset level - stay on current level
+            // Only reset the timer for the current level
+            setRemainingSeconds(getTimePerLevelInSeconds())
+           // Don't reset elapsed time - keep tournament running time
+           setBreakSeconds(0)
+           setIsOnBreak(false)
+         }
+         
+         function toggleEliminated(id) {
+           setEliminatedIds(prev => 
+             prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+           )
+         }
+         
+         function addRebuy(id) {
+            const currentRebuys = rebuyCounts[id] || 0
+            if (currentRebuys < maxRebuys) {
+              setRebuyCounts(prev => ({ ...prev, [id]: currentRebuys + 1 }))
+            }
+         }
+         
+         function removeRebuy(id) {
+           setRebuyCounts(prev => ({ ...prev, [id]: Math.max(0, (prev[id] || 0) - 1) }))
+         }
+         
+         function updatePlayerName(index, name) {
+           setPlayers(prev => {
+             const next = [...prev]
+             next[index] = { ...next[index], name }
+             return next
+           })
+         }
+         
+         function seatRandom() {
+           setPlayers(prev => {
+              // Ensure we have the correct number of players
+              if (prev.length !== numPlayers) {
+                // Create new players array with correct length
+                const newPlayers = Array.from({ length: numPlayers }, (_, i) => ({ 
+                  id: i + 1, 
+                  name: t.playerPlaceholder(i + 1)
+                }))
+                return newPlayers.sort(() => Math.random() - 0.5)
+              } else {
+                // Keep original IDs but shuffle the order
+                return [...prev].sort(() => Math.random() - 0.5)
+              }
+            })
+            // Reset rebuy counts and eliminated status when reseating
+            setRebuyCounts({})
+            setEliminatedIds([])
+          }
+          
+          function resetPlayers() {
+            setPlayers(Array.from({ length: numPlayers }, (_, i) => ({ 
+              id: i + 1, 
+              name: t.playerPlaceholder(i + 1)
+            })))
+            setRebuyCounts({})
+            setEliminatedIds([])
+          }
+          
+          function newGame() {
+            if (confirm('Are you sure you want to start a new game? This will reset everything to default values.')) {
+              // Reset all tournament state
+              setIsAppUnlocked(false)
+              setShowAppLogin(true)
+              setIsRunning(false)
+              setCurrentLevelIndex(0)
+              setRemainingSeconds(600)
+              setMinutesPerLevel(10)
+              setTimeFormat('minutes')
+              setTimePerLevelMMSS('10:00')
+              setElapsedSeconds(0)
+              setBreakSeconds(0)
+              setIsOnBreak(false)
+              setAutoBreakMinutes(0)
+              setNumPlayers(6)
+              setPlayers(Array.from({ length: 6 }, (_, i) => ({ 
+                id: i + 1, 
+                name: t.playerPlaceholder(i + 1)
+              })))
+              setEliminatedIds([])
+              setRebuyCounts({})
+              setLevels([
+                { level: 1, smallBlind: 25, bigBlind: 50 },
+                { level: 2, smallBlind: 50, bigBlind: 100 },
+                { level: 3, smallBlind: 75, bigBlind: 150 },
+                { level: 4, smallBlind: 100, bigBlind: 200 },
+                { level: 5, smallBlind: 150, bigBlind: 300 },
+                { level: 6, smallBlind: 200, bigBlind: 400 }
+              ])
+              setMaxRebuys(3)
+              setNumWinners(3)
+              setAddonTime('')
+              setPrizePool(1000)
+              setRatioInput('50/30/20')
+              setSpotifyUrl('')
+              setCurrentTrack(null)
+              
+              // Clear saved game state
+              localStorage.removeItem('pokerTournamentState')
+              
+              console.log('🎮 New game started! All settings reset to defaults.')
+            }
+         }
+         
+         // Break timer functions
+         function startBreak(minutes) {
+           setBreakSeconds(minutes * 60)
+           setIsOnBreak(true)
+           setIsRunning(false)
+         }
+         
+         function toggleBreakPause() {
+           if (breakSeconds > 0) {
+              if (!isOnBreak) {
+                // Resuming break - pause the blind timer
+                setIsRunning(false)
+              }
+             setIsOnBreak(!isOnBreak)
+           }
+         }
+         
+         // Sound functions
+         function playChime() {
+           if (!soundEnabled) return
+           
+           try {
+             // Create a double-beep sound that sounds more like an airport announcement
+             const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+             
+             // First beep (higher pitch)
+             const oscillator1 = audioContext.createOscillator()
+             const gainNode1 = audioContext.createGain()
+             
+             oscillator1.connect(gainNode1)
+             gainNode1.connect(audioContext.destination)
+             
+             oscillator1.frequency.setValueAtTime(1000, audioContext.currentTime) // 1000 Hz
+             oscillator1.type = 'sine'
+             
+             gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime)
+             gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
+             
+             oscillator1.start(audioContext.currentTime)
+             oscillator1.stop(audioContext.currentTime + 0.3)
+             
+             // Second beep (lower pitch, delayed)
+             const oscillator2 = audioContext.createOscillator()
+             const gainNode2 = audioContext.createGain()
+             
+             oscillator2.connect(gainNode2)
+             gainNode2.connect(audioContext.destination)
+             
+             oscillator2.frequency.setValueAtTime(800, audioContext.currentTime + 0.4) // 800 Hz, delayed
+             oscillator2.type = 'sine'
+             
+             gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime + 0.4)
+             gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.7)
+             
+             oscillator2.start(audioContext.currentTime + 0.4)
+             oscillator2.stop(audioContext.currentTime + 0.7)
+             
+           } catch (error) {
+             console.log('Audio playback failed:', error)
+             // Simple fallback alert
+             console.log('🔔 Tournament notification!')
+           }
+         }
+         
+                   // Fullscreen functions
+          function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+              document.documentElement.requestFullscreen().then(() => {
+                setIsFullscreen(true)
+              }).catch(err => {
+                console.log('Error attempting to enable fullscreen:', err)
+              })
+            } else {
+              document.exitFullscreen().then(() => {
+                setIsFullscreen(false)
+              }).catch(err => {
+                console.log('Error attempting to exit fullscreen:', err)
+              })
+            }
+          }
+          
+                   // App access functions
+         function handleAppUnlock() {
+           if (appPassword === '1234') {
+             setIsAppUnlocked(true)
+             setShowAppLogin(false)
+             setAppPassword('')
+           } else {
+             alert('Incorrect password!')
+             setAppPassword('')
+           }
+         }
+         
+         // Admin functions
+         function handleAdminAccess() {
+           if (adminPassword === '1234') {
+             // Set the admin mode based on what was requested
+             if (requestedAdminMode) {
+               setIsAdminMode(requestedAdminMode)
+               setRequestedAdminMode(null)
+             }
+             setShowAdminLogin(false)
+             setAdminPassword('')
+           } else {
+             alert('Incorrect password!')
+             setAdminPassword('')
+           }
+         }
+         
+         function exitAdmin() {
+           setIsAdminMode(false)
+           setShowAdminLogin(false)
+           setAdminPassword('')
+           setRequestedAdminMode(null)
+         }
+         
+         function addBlindLevel() {
+           const newLevel = levels.length + 1
+           const lastLevel = levels[levels.length - 1]
+           setLevels([...levels, {
+             level: newLevel,
+             smallBlind: lastLevel.smallBlind * 2,
+             bigBlind: lastLevel.bigBlind * 2
+           }])
+         }
+         
+         function removeBlindLevel() {
+           if (levels.length > 1) {
+             setLevels(levels.slice(0, -1))
+           }
+         }
+         
+         function resetToDefaults() {
+           setLevels([
+             { level: 1, smallBlind: 25, bigBlind: 50 },
+             { level: 2, smallBlind: 50, bigBlind: 100 },
+             { level: 3, smallBlind: 75, bigBlind: 150 },
+             { level: 4, smallBlind: 100, bigBlind: 200 },
+             { level: 5, smallBlind: 150, bigBlind: 300 },
+             { level: 6, smallBlind: 200, bigBlind: 400 }
+           ])
+           setTimeFormat('minutes')
+           setTimePerLevelMMSS('10:00')
+         }
+         
+         // Prize calculator functions
+          function parseRatio(ratioStr, winners) {
+           const parts = ratioStr.split('/').map(Number)
+            if (parts.length !== winners || parts.some(isNaN)) {
+              // Generate default ratios based on number of winners
+              const defaultRatios = []
+              for (let i = 0; i < winners; i++) {
+                if (i === 0) defaultRatios.push(50) // 1st place gets 50%
+                else if (i === 1) defaultRatios.push(30) // 2nd place gets 30%
+                else if (i === 2) defaultRatios.push(20) // 3rd place gets 20%
+                else defaultRatios.push(Math.max(5, 20 - (i * 5))) // Subsequent places get decreasing amounts
+              }
+              return defaultRatios
+            }
+           return parts
+         }
+         
+         // Spotify functions
+         function handleSpotifyPlay() {
+           if (!spotifyUrl.trim()) return
+           
+           // Extract track/playlist ID from Spotify URL
+           const match = spotifyUrl.match(/spotify\.com\/(track|playlist|album)\/([a-zA-Z0-9]+)/)
+           if (match) {
+             const [, type, id] = match
+             setCurrentTrack({ type, id, url: spotifyUrl })
+           } else {
+             alert('Please enter a valid Spotify URL')
+           }
+         }
+         
+         function extractSpotifyEmbedUrl(url) {
+           const match = url.match(/spotify\.com\/(track|playlist|album)\/([a-zA-Z0-9]+)/)
+           if (match) {
+             const [, type, id] = match
+             return `https://open.spotify.com/embed/${type}/${id}`
+           }
+           return null
+         }
+         
+         const prizeDistribution = useMemo(() => {
+            const ratio = parseRatio(ratioInput, numWinners)
+           const total = ratio.reduce((sum, r) => sum + r, 0)
+           return ratio.map(r => Math.round((r / total) * prizePool))
+          }, [ratioInput, prizePool, numWinners])
+         
+                   // Seat positions are now calculated directly in the JSX for simplicity
+        
+                 // Timer effects
+         useEffect(() => {
+           if (!isRunning) return
+           
+           intervalRef.current = setInterval(() => {
+             setRemainingSeconds(prev => {
+               if (prev <= 1) {
+                 // Level up
+                 if (currentLevelIndex < levels.length - 1) {
+                   setCurrentLevelIndex(prev => prev + 1)
+                   playChime()
+                   return getTimePerLevelInSeconds()
+                 } else {
+                   setIsRunning(false)
+                   playChime()
+                   return 0
+                 }
+               }
+               return prev - 1
+             })
+           }, 1000)
+           
+           return () => clearInterval(intervalRef.current)
+         }, [isRunning, currentLevelIndex, levels.length, timeFormat, minutesPerLevel, timePerLevelMMSS])
+         
+         // Break timer effect
+         useEffect(() => {
+           if (!isOnBreak || breakSeconds <= 0) return
+           
+           breakIntervalRef.current = setInterval(() => {
+             setBreakSeconds(prev => {
+               if (prev <= 1) {
+                 setIsOnBreak(false)
+                 playChime()
+                 return 0
+               }
+               return prev - 1
+             })
+           }, 1000)
+           
+           return () => clearInterval(breakIntervalRef.current)
+          }, [isOnBreak, breakSeconds, soundEnabled])
+         
+                   // Elapsed time effect - only count game time, not break time
+         useEffect(() => {
+            if (!isRunning) return
+           
+           elapsedIntervalRef.current = setInterval(() => {
+             setElapsedSeconds(prev => prev + 1)
+           }, 1000)
+           
+           return () => clearInterval(elapsedIntervalRef.current)
+          }, [isRunning])
+         
+         // Auto-break effect
+         useEffect(() => {
+           if (autoBreakMinutes <= 0 || !isRunning) return
+           
+           const checkInterval = setInterval(() => {
+             if (elapsedSeconds > 0 && elapsedSeconds % (autoBreakMinutes * 60) === 0) {
+               startBreak(5) // 5 minute break
+             }
+           }, 1000)
+           
+           return () => clearInterval(checkInterval)
+          }, [autoBreakMinutes, elapsedSeconds, isRunning, soundEnabled])
+         
+                               // Addon timer effect - always runs regardless of tournament state
+         useEffect(() => {
+            if (!addonTime) return
+            
+            const checkInterval = setInterval(() => {
+              const now = new Date()
+              const currentHour = now.getHours()
+              const currentMinute = now.getMinutes()
+              const [targetHour, targetMinute] = addonTime.split(':').map(Number)
+              
+              if (currentHour === targetHour && currentMinute === targetMinute) {
+                playChime() // Play Airport sound when addon time is reached
+              }
+            }, 1000)
+            
+            return () => clearInterval(checkInterval)
+          }, [addonTime, soundEnabled])
+          
+          // Addon timer display update effect - updates every second for smooth countdown
+          useEffect(() => {
+            if (!addonTime) return
+            
+            const displayInterval = setInterval(() => {
+              // Force re-render to update the addon timer display
+              setAddonSeconds(prev => prev + 1)
+            }, 1000)
+            
+            return () => clearInterval(displayInterval)
+          }, [addonTime])
+         
+                   // Save game state to localStorage whenever important state changes
+          useEffect(() => {
+            const gameState = {
+              isRunning,
+              currentLevelIndex,
+              remainingSeconds,
+              minutesPerLevel,
+              timeFormat,
+              timePerLevelMMSS,
+              elapsedSeconds,
+              breakSeconds,
+              isOnBreak,
+              autoBreakMinutes,
+              numPlayers,
+              players,
+              eliminatedIds,
+              rebuyCounts,
+              levels,
+              maxRebuys,
+              addonTime,
+              numWinners,
+              prizePool,
+              ratioInput,
+              spotifyUrl,
+              currentTrack
+            }
+            localStorage.setItem('pokerTournamentState', JSON.stringify(gameState))
+          }, [
+            isRunning, currentLevelIndex, remainingSeconds, minutesPerLevel,
+            timeFormat, timePerLevelMMSS, elapsedSeconds, breakSeconds, isOnBreak, autoBreakMinutes,
+            numPlayers, players, eliminatedIds, rebuyCounts, levels,
+            maxRebuys, addonTime, numWinners, prizePool, ratioInput, spotifyUrl, currentTrack
+          ])
+          
+          // Player count effect - handle dynamic player count changes
+          useEffect(() => {
+            const savedState = localStorage.getItem('pokerTournamentState')
+            if (!savedState) {
+              // Only create default players if no saved state exists
+           setPlayers(Array.from({ length: numPlayers }, (_, i) => ({ 
+             id: i + 1, 
+             name: t.playerPlaceholder(i + 1)
+           })))
+              setRebuyCounts({})
+              setEliminatedIds([])
+            } else {
+              // If we have saved state but numPlayers changed, update players array
+              setPlayers(prevPlayers => {
+                if (prevPlayers.length !== numPlayers) {
+                  // Create new players array with correct length
+                  const newPlayers = Array.from({ length: numPlayers }, (_, i) => {
+                    // Try to preserve existing player data if possible
+                    if (i < prevPlayers.length) {
+                      return prevPlayers[i]
+                    } else {
+                      // Create new player for additional seats
+                      return { 
+                        id: i + 1, 
+                        name: t.playerPlaceholder(i + 1)
+                      }
+                    }
+                  })
+                  return newPlayers
+                }
+                return prevPlayers
+              })
+              // Reset rebuy counts and eliminated status when player count changes
+              setRebuyCounts({})
+              setEliminatedIds([])
+            }
+         }, [numPlayers, t.playerPlaceholder])
+         
+         // Language effect
+         useEffect(() => {
+           document.documentElement.lang = lang
+           document.documentElement.dir = lang === 'he' ? 'rtl' : 'ltr'
+            
+            // Update player names when language changes
+            setPlayers(prev => prev.map((player, idx) => ({
+              ...player,
+              name: t.playerPlaceholder(idx + 1)
+            })))
+          }, [lang, t.playerPlaceholder])
+          
+          // Fullscreen change effect
+          useEffect(() => {
+            const handleFullscreenChange = () => {
+              setIsFullscreen(!!document.fullscreenElement)
+            }
+            
+            document.addEventListener('fullscreenchange', handleFullscreenChange)
+            return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+          }, [])
+        
+                 // Format time
+         function formatTime(seconds) {
+           const mins = Math.floor(seconds / 60)
+           const secs = seconds % 60
+           return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+         }
+         
+         function formatElapsedTime(seconds) {
+           const hours = Math.floor(seconds / 3600)
+           const mins = Math.floor((seconds % 3600) / 60)
+           const secs = seconds % 60
+           return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+          }
+          
+                     function formatTimeUntilAddon() {
+             if (!addonTime) return null
+             
+             const now = new Date()
+             const currentHour = now.getHours()
+             const currentMinute = now.getMinutes()
+             const currentSecond = now.getSeconds()
+             
+             const [targetHour, targetMinute] = addonTime.split(':').map(Number)
+             
+             // Calculate total minutes until target time
+             let totalMinutesUntilAddon = (targetHour * 60 + targetMinute) - (currentHour * 60 + currentMinute)
+             
+             // If we've passed the time today, target tomorrow
+             if (totalMinutesUntilAddon <= 0) {
+               totalMinutesUntilAddon += 24 * 60 // Add 24 hours
+             }
+             
+             const totalSecondsUntilAddon = (totalMinutesUntilAddon * 60) - currentSecond
+             
+             if (totalSecondsUntilAddon <= 0) return '00:00'
+             
+             const hours = Math.floor(totalSecondsUntilAddon / 3600)
+             const mins = Math.floor((totalSecondsUntilAddon % 3600) / 60)
+             const secs = totalSecondsUntilAddon % 60
+             
+             if (hours > 0) {
+               return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+             } else {
+               return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+             }
+         }
+        
+        return (
+          <div className="max-w-7xl mx-auto p-6">
+             {/* App Password Modal */}
+             {showAppLogin && (
+               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                 <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-[500px] max-w-[95vw]">
+                   {/* Welcome Message */}
+                   <h2 className="text-2xl font-bold text-slate-100 mb-6 text-center">🎮 {t.welcomeMessage}</h2>
+                   
+                   {/* Language Selection */}
+                   <div className="mb-6">
+                     <label className="text-slate-300 text-sm block mb-3 font-medium">{t.chooseLanguage}:</label>
+                     <div className="flex gap-3">
+                 <button
+                         className={`flex-1 px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                           lang === 'en' 
+                             ? 'bg-indigo-600 border-indigo-500 text-white' 
+                             : 'bg-slate-700/60 border-slate-600 text-slate-300 hover:bg-slate-700/60'
+                         }`}
+                         onClick={() => setLang('en')}
+                       >
+                         🇺🇸 English
+                       </button>
+                       <button
+                         className={`flex-1 px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                           lang === 'he' 
+                             ? 'bg-indigo-600 border-indigo-500 text-white' 
+                             : 'bg-slate-700/60 border-slate-600 text-slate-300 hover:bg-slate-700/60'
+                         }`}
+                         onClick={() => setLang('he')}
+                       >
+                         🇮🇱 עברית
+                       </button>
+                     </div>
+                   </div>
+                   
+                                                             {/* Game Choice Buttons */}
+                     <div className="mb-6">
+                       <label className="text-slate-300 text-sm block mb-3 font-medium">{t.continueLastGame}:</label>
+                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                         {/* Open Recent Game Button */}
+                         <button
+                           className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                             (() => {
+                               const savedState = localStorage.getItem('pokerTournamentState')
+                               return savedState ? 'bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500' : 'bg-slate-500 border-slate-400 text-slate-300 cursor-not-allowed'
+                             })()
+                   }`}
+                   onClick={() => {
+                             const savedState = localStorage.getItem('pokerTournamentState')
+                             if (savedState) {
+                               // Show info about the saved game
+                               try {
+                                 const gameState = JSON.parse(savedState)
+                                 const savedDate = new Date(gameState.savedAt || Date.now())
+                                 const dateStr = savedDate.toLocaleDateString(lang === 'he' ? 'he-IL' : 'en-US')
+                                 const timeStr = savedDate.toLocaleTimeString(lang === 'he' ? 'he-IL' : 'en-US', { 
+                                   hour: '2-digit', 
+                                   minute: '2-digit' 
+                                 })
+                                 alert(lang === 'he' 
+                                   ? `משחק שמור נמצא מ-${dateStr} ${timeStr}\n${gameState.numPlayers || 0} שחקנים, רמה ${gameState.currentLevelIndex + 1 || 1}\nהכנס סיסמה כדי להמשיך`
+                                   : `Saved game found from ${dateStr} ${timeStr}\n${gameState.numPlayers || 0} players, level ${gameState.currentLevelIndex + 1 || 1}\nEnter password to continue`
+                                 )
+                               } catch (e) {
+                                 alert(lang === 'he' ? 'שגיאה בקריאת המשחק השמור' : 'Error reading saved game')
+                               }
+                     } else {
+                               alert(lang === 'he' ? 'לא נמצא משחק שמור' : 'No saved game found')
+                             }
+                           }}
+                           disabled={!localStorage.getItem('pokerTournamentState')}
+                         >
+                           💾 {lang === 'he' ? 'פתח משחק אחרון' : 'Open Recent Game'}
+                         </button>
+                         
+                         {/* Start New Game Button */}
+                         <button
+                           className="px-4 py-3 rounded-lg border-2 font-medium transition-all bg-blue-600 border-blue-500 text-white hover:bg-blue-500"
+                           onClick={() => {
+                             // Clear saved game and show message
+                             localStorage.removeItem('pokerTournamentState')
+                             setAppPassword('')
+                             alert(lang === 'he' 
+                               ? 'משחק שמור נמחק! הכנס סיסמה כדי להתחיל משחק חדש'
+                               : 'Saved game cleared! Enter password to start new game'
+                             )
+                             console.log('🎮 Saved game cleared, ready for new game')
+                           }}
+                         >
+                           🎮 {lang === 'he' ? 'משחק חדש' : 'New Game'}
+                         </button>
+                       </div>
+                       
+                       {/* Saved Game Info Display */}
+                       {(() => {
+                         const savedState = localStorage.getItem('pokerTournamentState')
+                         if (savedState) {
+                           try {
+                             const gameState = JSON.parse(savedState)
+                             const savedDate = new Date(gameState.savedAt || Date.now())
+                             const dateStr = savedDate.toLocaleDateString(lang === 'he' ? 'he-IL' : 'en-US')
+                             const timeStr = savedDate.toLocaleTimeString(lang === 'he' ? 'he-IL' : 'en-US', { 
+                               hour: '2-digit', 
+                               minute: '2-digit' 
+                             })
+                             return (
+                               <div className="bg-slate-700/40 border border-slate-600 rounded-lg p-4 mt-3">
+                                 <div className="text-slate-200 text-sm mb-2">
+                                   ✅ {t.savedGameInfo} {dateStr} {timeStr}
+                                 </div>
+                                 <div className="text-slate-300 text-xs">
+                                   {gameState.numPlayers || 0} {t.savedGameDetails} {gameState.currentLevelIndex + 1 || 1}
+                                 </div>
+                               </div>
+                             )
+                           } catch (e) {
+                             return (
+                               <div className="text-slate-400 text-sm italic">
+                                 {t.noSavedGame}
+                               </div>
+                             )
+                           }
+                         } else {
+                           return (
+                             <div className="text-slate-400 text-sm italic">
+                               {t.noSavedGame}
+                             </div>
+                           )
+                         }
+                       })()}
+                     </div>
+                     
+                     <div className="space-y-4">
+                       <div>
+                         <label className="text-slate-300 text-sm block mb-2">{t.enterPassword}:</label>
+                       <input
+                         className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                         type="password"
+                         value={appPassword}
+                         onChange={(e) => setAppPassword(e.target.value)}
+                                                    placeholder={t.enterPassword}
+                           onKeyPress={(e) => e.key === 'Enter' && handleAppUnlock()}
+                           autoFocus
+                       />
+                     </div>
+                     {/* Action Buttons */}
+                     <div className="flex gap-3">
+                       <button
+                         className="flex-1 px-4 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+                         onClick={handleAppUnlock}
+                       >
+                         🔓 {t.unlock}
+                       </button>
+                       <button
+                         className="px-6 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                         onClick={() => {
+                           setShowAppLogin(false)
+                           setAppPassword('')
+                         }}
+                       >
+                         ❌ {t.cancel}
+                       </button>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             )}
+             
+             {/* Audio placeholder - using Web Audio API instead */}
+             <div ref={audioRef} style={{display: 'none'}}></div>
+             
+             {/* App Content - Only show when unlocked */}
+             {isAppUnlocked && (
+               <>
+                                {/* Instructions Banner */}
+               <div className="bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+
+
+                 <div className="flex items-center gap-3 mb-2">
+                   <span className="text-2xl">📚</span>
+                   <h3 className="text-blue-200 font-semibold text-lg">{t.howToUse}</h3>
+                 </div>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-blue-100 text-sm">
+                   <div>
+                     <div className="font-medium mb-1">🏆 {t.tournamentTab}:</div>
+                     <div className="text-blue-200">{t.tournamentTabDesc1}</div>
+                     <div className="text-blue-200">{t.tournamentTabDesc2}</div>
+                     <div className="text-blue-200">{t.tournamentTabDesc3}</div>
+                   </div>
+                   <div>
+                     <div className="font-medium mb-1">💰 {t.prizeCalculator}:</div>
+                     <div className="text-blue-200">{t.prizeCalculatorDesc1}</div>
+                     <div className="text-blue-200">{t.prizeCalculatorDesc2}</div>
+                     <div className="text-blue-200">{t.prizeCalculatorDesc3}</div>
+                   </div>
+                   <div>
+                     <div className="font-medium mb-1">⚙️ {t.adminSettings}:</div>
+                     <div className="text-blue-200">{t.adminSettingsDesc1}</div>
+                     <div className="text-blue-200">{t.adminSettingsDesc2}</div>
+                     <div className="text-blue-200">{t.adminSettingsDesc3}</div>
+                   </div>
+                   <div>
+                     <div className="font-medium mb-1">🎮 {t.newGame}:</div>
+                     <div className="text-blue-200">{t.newGameDesc1}</div>
+                     <div className="text-blue-200">{t.newGameDesc2}</div>
+                     <div className="text-blue-200">{t.newGameDesc3}</div>
+                   </div>
+                 </div>
+               </div>
+             
+                          {/* Header */}
+             <div className="flex items-center justify-between mb-6">
+               <h1 className="text-3xl font-bold text-slate-100">{t.title}</h1>
+               <div className="flex items-center gap-3">
+                                                     <button
+                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors"
+                    onClick={newGame}
+                  >
+                    🎮 New Game
+                  </button>
+                  <button
+                    className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                    onClick={toggleFullscreen}
+                  >
+                    {isFullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen'}
+                 </button>
+                 <button
+                   className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                   onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
+                 >
+                   {lang === 'he' ? 'English' : 'עברית'}
+                 </button>
+               </div>
+                          </div>
+
+             {/* Admin Password Modal */}
+             {showAdminLogin && (
+               <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                 <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-96">
+                   <h3 className="text-xl font-semibold text-slate-100 mb-4 text-center">🔐 {lang === 'he' ? 'גישת מנהל' : 'Admin Access'}</h3>
+                   <div className="space-y-4">
+                     <div>
+                       <label className="text-slate-300 text-sm block mb-2">Password:</label>
+                       <input
+                         className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                         type="password"
+                         value={adminPassword}
+                         onChange={(e) => setAdminPassword(e.target.value)}
+                         placeholder={lang === 'he' ? 'הכנס סיסמה' : 'Enter password'}
+                         onKeyPress={(e) => e.key === 'Enter' && handleAdminAccess()}
+                       />
+                     </div>
+                     <div className="flex gap-3">
+                       <button
+                         className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+                         onClick={handleAdminAccess}
+                       >
+                         Login
+                       </button>
+                       <button
+                         className="flex-1 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                         onClick={() => {
+                           setShowAdminLogin(false)
+                           setAdminPassword('')
+                           setRequestedAdminMode(null)
+                         }}
+                       >
+                         Cancel
+                       </button>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+             )}
+
+             {/* Tab Navigation */}
+             <div className="flex items-center gap-2 mb-6">
+               <button
+                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                   isAdminMode === false 
+                     ? 'bg-indigo-600 text-white' 
+                     : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                 }`}
+                 onClick={() => setIsAdminMode(false)}
+               >
+                 🏆 {t.tournamentTitle}
+               </button>
+                                <button
+                   className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    isAdminMode === 'prize' 
+                       ? 'bg-indigo-600 text-white' 
+                       : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                   }`}
+                  onClick={() => setIsAdminMode('prize')}
+                >
+                  💰 {t.prizeCalculator}
+                 </button>
+                                <button
+                   className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                     isAdminMode === 'admin' 
+                       ? 'bg-indigo-600 text-white' 
+                       : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                   }`}
+                   onClick={() => {
+                     if (isAdminMode === 'admin') {
+                       setIsAdminMode(false)
+                     } else if (isAdminMode === false || isAdminMode === 'prize') {
+                       setRequestedAdminMode('admin')
+                       setShowAdminLogin(true)
+                     }
+                   }}
+                 >
+                   ⚙️ {t.tournamentSettings}
+                 </button>
+             </div>
+
+                           {/* Main Tournament Content - Only show when not in prize calculator or admin mode */}
+              {isAdminMode === false && (
+             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                             {/* LEFT PANEL - Player Management */}
+               <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                 <h2 className="text-2xl font-semibold text-slate-100 mb-4">{t.tableTitle}</h2>
+                 
+                 {/* Player Count & Random Seating */}
+                 <div className="flex items-center justify-between mb-4">
+                   <div className="flex items-center gap-3">
+                     <label className="text-slate-300">{t.playersCount}</label>
+                     <select
+                       className="bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                       value={numPlayers}
+                       onChange={(e) => setNumPlayers(Number(e.target.value))}
+                     >
+                       {[2,3,4,5,6,7,8,9].map(n => (
+                         <option key={n} value={n}>{n}</option>
+                       ))}
+                     </select>
+                   </div>
+                   <button 
+                     className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors" 
+                     onClick={seatRandom}
+                   >
+                     {t.randomSeating}
+                   </button>
+                 </div>
+
+                                                                                          {/* Circular Table Visualization - Players evenly distributed */}
+                  <div className="relative w-full h-80 mb-6 bg-slate-900/40 rounded-2xl border border-slate-600 overflow-hidden">
+                     {/* Table surface - Perfect circle */}
+                     <div className="absolute inset-12 bg-gradient-to-br from-emerald-800/40 to-emerald-600/20 rounded-full border-2 border-emerald-500/30"></div>
+                    
+                    {/* Center Aces */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="flex gap-4 text-4xl font-bold text-slate-300">
+                        <span>♠</span>
+                        <span className="text-red-400">♥</span>
+                        <span className="text-red-400">♦</span>
+                        <span>♣</span>
+                      </div>
+                    </div>
+                    
+                                          {/* Player seats - Perfect circular positioning */}
+                      {players.map((player, idx) => {
+                       // Calculate position on a perfect circle
+                       const centerX = 50 // 50% from left
+                       const centerY = 50 // 50% from top
+                       const radius = 38 // 38% radius for player positioning (optimized for frame fit)
+                       
+                       // Calculate angle for each player (evenly distributed)
+                       const angleStep = (2 * Math.PI) / numPlayers
+                       const angle = idx * angleStep - Math.PI / 2 // Start from top (-90 degrees)
+                       
+                       // Calculate position
+                       const x = centerX + radius * Math.cos(angle)
+                       const y = centerY + radius * Math.sin(angle)
+                        
+                        return (
+                          <div
+                            key={player.id}
+                            className={`absolute w-20 h-20 rounded-full border-2 flex items-center justify-center text-sm font-medium transition-all ${
+                              eliminatedIds.includes(player.id)
+                                ? 'bg-rose-700/60 border-rose-600 text-rose-100'
+                                : 'bg-slate-700/60 border-slate-500 text-slate-100 hover:bg-slate-600/60'
+                            }`}
+                            style={{
+                             left: `${x}%`,
+                             top: `${y}%`,
+                              transform: 'translate(-50%, -50%)'
+                            }}
+                          >
+                            <div className="text-center">
+                              <div className="text-xs font-bold">{player.name}</div>
+                              <div className="text-xs opacity-75">
+                                {rebuyCounts[player.id] || 0} rebuys
+                              </div>
+                              {maxRebuys > 0 && (rebuyCounts[player.id] || 0) >= maxRebuys && (
+                                <div className="text-xs text-amber-400 font-bold mt-1">
+                                  Max Reached
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                  </div>
+
+                 {/* Player Grid */}
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                   {players.map((player, idx) => (
+                     <div key={player.id} className="bg-slate-900/40 rounded-lg border border-slate-600 p-3">
+                       {/* Player Header */}
+                       <div className="flex items-center justify-between mb-2">
+                         <span className="text-slate-300 text-sm font-medium">{t.seat} {idx + 1}</span>
+                         <button
+                           className={`px-3 py-1 text-xs rounded-md border font-medium ${
+                             eliminatedIds.includes(player.id) 
+                               ? 'bg-rose-700/60 border-rose-600 text-rose-100' 
+                               : 'bg-emerald-700/40 border-emerald-600 text-emerald-100'
+                           }`}
+                           onClick={() => toggleEliminated(player.id)}
+                         >
+                           {eliminatedIds.includes(player.id) ? 'Out' : 'In'}
+                         </button>
+                       </div>
+                       
+                       {/* Player Name */}
+                       <input
+                         className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm mb-2"
+                         type="text"
+                         value={player.name}
+                         onChange={(e) => updatePlayerName(idx, e.target.value)}
+                         placeholder={t.playerPlaceholder(idx + 1)}
+                       />
+                       
+                       {/* Rebuy Controls */}
+                       <div className="flex items-center justify-between">
+                           <span className="text-slate-300 text-xs">Rebuys:</span>
+                         <div className="flex items-center gap-2">
+                           <button
+                             className="px-2 py-1 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60"
+                             onClick={() => removeRebuy(player.id)}
+                           >
+                             -
+                           </button>
+                           <span className="text-slate-300 text-sm font-mono min-w-[2rem] text-center">
+                             {rebuyCounts[player.id] || 0}
+                           </span>
+                           <button
+                               className={`px-2 py-1 text-xs rounded-md border font-medium ${
+                                 (rebuyCounts[player.id] || 0) >= maxRebuys
+                                   ? 'bg-slate-500 text-slate-400 cursor-not-allowed'
+                                   : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                               }`}
+                             onClick={() => addRebuy(player.id)}
+                               disabled={(rebuyCounts[player.id] || 0) >= maxRebuys}
+                           >
+                             +
+                           </button>
+                         </div>
+                           {maxRebuys > 0 && (
+                             <span className="text-xs text-slate-500">
+                               Max: {maxRebuys}
+                             </span>
+                           )}
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+
+                             {/* RIGHT PANEL - Tournament Management */}
+               <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                 <h2 className="text-2xl font-semibold text-slate-100 mb-4">{t.tournamentTitle}</h2>
+                 
+                 {/* Level Settings */}
+                  <div className="space-y-4 mb-4">
+                    {/* Time Format Selection */}
+                    <div className="flex items-center gap-4">
+                   <label className="text-slate-300">{t.levelTime}</label>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 text-slate-300">
+                          <input
+                            type="radio"
+                            name="timeFormat"
+                            className="w-4 h-4 accent-indigo-600"
+                            checked={timeFormat === 'minutes'}
+                            onChange={() => setTimeFormat('minutes')}
+                          />
+                          {t.minutes}
+                        </label>
+                        <label className="flex items-center gap-2 text-slate-300">
+                          <input
+                            type="radio"
+                            name="timeFormat"
+                            className="w-4 h-4 accent-indigo-600"
+                            checked={timeFormat === 'mmss'}
+                            onChange={() => setTimeFormat('mmss')}
+                          />
+                          {t.mmss}
+                        </label>
+                      </div>
+                    </div>
+                    
+                    {/* Time Input Based on Format */}
+                    {timeFormat === 'minutes' ? (
+                      <div className="flex items-center gap-4">
+                   <input
+                     className="w-20 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                     type="number"
+                     min="1"
+                     value={minutesPerLevel}
+                     onChange={(e) => setMinutesPerLevel(Number(e.target.value))}
+                   />
+                        <span className="text-slate-300">{t.minutes}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-4">
+                                                 <input
+                           className="w-24 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                           type="text"
+                           pattern="^([0-9]|[0-5][0-9]):([0-5][0-9])$"
+                           placeholder="10:00"
+                           value={timePerLevelMMSS}
+                           onChange={(e) => {
+                             const value = e.target.value
+                             // Validate MM:SS format
+                             if (/^([0-9]|[0-5][0-9]):([0-5][0-9])$/.test(value)) {
+                               setTimePerLevelMMSS(value)
+                             } else if (value === '' || value === ':' || /^[0-9:]*$/.test(value)) {
+                               // Allow partial input while typing
+                               setTimePerLevelMMSS(value)
+                             }
+                           }}
+                           onBlur={(e) => {
+                             // Format properly when leaving the field
+                             const value = e.target.value
+                             if (value && !/^([0-9]|[0-5][0-9]):([0-5][0-9])$/.test(value)) {
+                               // Try to fix common input errors
+                               const parts = value.split(':')
+                               if (parts.length === 2) {
+                                 const mins = Math.min(59, Math.max(0, parseInt(parts[0]) || 0))
+                                 const secs = Math.min(59, Math.max(0, parseInt(parts[1]) || 0))
+                                 setTimePerLevelMMSS(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`)
+                               } else {
+                                 // Default to 10:00 if invalid
+                                 setTimePerLevelMMSS('10:00')
+                               }
+                             }
+                           }}
+                         />
+                        <span className="text-slate-300">{t.mmss}</span>
+                      </div>
+                    )}
+                    
+                    {/* Apply Button */}
+                    <div className="flex justify-center">
+                      <button
+                        className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                        onClick={() => {
+                          // Apply the new time settings to the current timer
+                          if (timeFormat === 'minutes') {
+                            setRemainingSeconds(minutesPerLevel * 60)
+                          } else {
+                            // Parse MM:SS format
+                            const [minutes, seconds] = timePerLevelMMSS.split(':').map(Number)
+                            const totalSeconds = (minutes * 60) + (seconds || 0)
+                            setRemainingSeconds(totalSeconds)
+                          }
+                        }}
+                      >
+                        ✅ {lang === 'he' ? 'החל הגדרות' : 'Apply Settings'}
+                      </button>
+                    </div>
+                    
+                    {/* Sound Setting */}
+                    <div className="flex items-center gap-2">
+                   <label className="flex items-center gap-2 text-slate-300">
+                     <input
+                       type="checkbox"
+                       className="w-4 h-4 accent-indigo-600"
+                       checked={soundEnabled}
+                       onChange={(e) => setSoundEnabled(e.target.checked)}
+                     />
+                     {t.sound}
+                   </label>
+                    </div>
+                 </div>
+
+                 {/* Current Level Display */}
+                 <div className="bg-gradient-to-br from-indigo-600/20 to-fuchsia-600/10 border border-slate-700 rounded-xl p-6 mb-4">
+                   <div className="text-center mb-4">
+                     <div className="text-sm text-slate-300 mb-1">{t.currentLevel}</div>
+                     <div className="text-4xl font-bold text-slate-100">Level {currentLevel.level}</div>
+                   </div>
+                   
+                   <div className="grid grid-cols-2 gap-4 mb-4">
+                     <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700 text-center">
+                       <div className="text-sm text-slate-400 mb-1">{t.smallBlind}</div>
+                       <div className="text-2xl font-semibold text-slate-100">{currentLevel.smallBlind}</div>
+                     </div>
+                     <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700 text-center">
+                       <div className="text-sm text-slate-400 mb-1">{t.bigBlind}</div>
+                       <div className="text-2xl font-semibold text-slate-100">{currentLevel.bigBlind}</div>
+                     </div>
+                   </div>
+
+                   {/* Next Level Preview */}
+                   {currentLevelIndex < levels.length - 1 && (
+                     <div className="border-t border-slate-600 pt-4">
+                       <div className="text-sm text-slate-400 mb-2 text-center">{t.nextLevel}</div>
+                       <div className="grid grid-cols-2 gap-4">
+                         <div className="bg-slate-800/40 rounded-lg p-3 border border-slate-600 text-center">
+                           <div className="text-xs text-slate-500">{t.smallBlind}</div>
+                           <div className="text-lg font-medium text-slate-300">{levels[currentLevelIndex + 1].smallBlind}</div>
+                         </div>
+                         <div className="bg-slate-800/40 rounded-lg p-3 border border-slate-600 text-center">
+                           <div className="text-xs text-slate-500">{t.bigBlind}</div>
+                           <div className="text-lg font-medium text-slate-300">{levels[currentLevelIndex + 1].bigBlind}</div>
+                         </div>
+                       </div>
+                     </div>
+                   )}
+                 </div>
+
+                 {/* Timer */}
+                 <div className="text-center mb-4">
+                   <div className="text-sm text-slate-300 mb-2">{t.timer}</div>
+                   <div className="text-6xl font-mono text-slate-100 mb-4">{formatTime(remainingSeconds)}</div>
+                     
+                                          {/* Addon Timer Display */}
+                      {addonTime && (
+                        <div className="mb-4">
+                          <div className="text-sm text-amber-300 mb-1">{t.addonIn} :</div>
+                          <div className={`text-2xl font-mono font-bold ${
+                            formatTimeUntilAddon() === '00:00' 
+                              ? 'text-red-400 animate-pulse' 
+                              : 'text-amber-100'
+                          }`}>
+                            {formatTimeUntilAddon()}
+                          </div>
+                          {formatTimeUntilAddon() === '00:00' && (
+                            <div className="text-xs text-red-400 font-bold mt-1 animate-pulse">
+                              ADDON TIME!
+                            </div>
+                          )}
+                        </div>
+                      )}
+                     
+                   <div className="flex gap-3 justify-center">
+                     <button 
+                          className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+                            isOnBreak 
+                              ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
+                              : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                          }`}
+                       onClick={handleStartPause}
+                          disabled={isOnBreak}
+                     >
+                       {isRunning ? 'Pause' : 'Start'}
+                     </button>
+                     <button 
+                       className="px-6 py-3 rounded-lg font-medium transition-colors bg-slate-700 hover:bg-slate-600 text-slate-100" 
+                       onClick={handleReset}
+                     >
+                       Reset
+                     </button>
+                   </div>
+                 </div>
+
+                 {/* Break Timer & Tournament Info */}
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                   {/* Break Timer */}
+                   <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-600">
+                     <div className="text-center mb-3">
+                       <div className="text-sm text-slate-300 mb-1">{t.breakTimer}</div>
+                       <div className="text-3xl font-mono text-slate-100 mb-3">{formatTime(breakSeconds)}</div>
+                       <div className="flex gap-2 justify-center mb-3">
+                         <button
+                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           onClick={() => startBreak(5)}
+                         >
+                           5m
+                         </button>
+                         <button
+                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           onClick={() => startBreak(10)}
+                         >
+                           10m
+                         </button>
+                         <button
+                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           onClick={() => startBreak(15)}
+                         >
+                           15m
+                         </button>
+                       </div>
+                         <div className="w-full flex justify-center">
+                       <button
+                             className={`px-4 py-2 text-xs rounded-md border font-medium w-20 text-center ${
+                           isOnBreak && breakSeconds > 0
+                             ? 'bg-amber-600/60 border-amber-600 text-amber-100'
+                             : 'bg-slate-700/60 border-slate-600 text-slate-100'
+                         }`}
+                         onClick={toggleBreakPause}
+                         disabled={breakSeconds === 0}
+                       >
+                         {isOnBreak ? 'Pause' : 'Resume'}
+                       </button>
+                         </div>
+                     </div>
+                   </div>
+
+                   {/* Tournament Info */}
+                   <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-600">
+                     <div className="text-center">
+                       <div className="text-sm text-slate-300 mb-2">{t.totalTime}</div>
+                       <div className="text-2xl font-mono text-slate-100 mb-3">{formatElapsedTime(elapsedSeconds)}</div>
+                         
+                         {/* Tournament Settings Display */}
+                         <div className="border-t border-slate-600 pt-3 mt-3">
+                           <div className="grid grid-cols-2 gap-3 text-xs">
+                             <div className="text-slate-400">
+                               <div>Max Rebuys:</div>
+                               <div className="text-slate-200 font-medium">{maxRebuys}</div>
+                             </div>
+                                                          <div className="text-slate-400">
+                                <div>Addon Time:</div>
+                                <div className="text-slate-200 font-medium">{addonTime || 'Off'}</div>
+                              </div>
+                           </div>
+                         </div>
+                         
+                         <div className="text-sm text-slate-400 mb-2 mt-3">{t.automaticBreak}</div>
+                          <div className="flex justify-center">
+                       <input
+                         className="w-16 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                         type="number"
+                         min="0"
+                         value={autoBreakMinutes}
+                         onChange={(e) => setAutoBreakMinutes(Number(e.target.value))}
+                         placeholder="0"
+                       />
+                          </div>
+                       <div className="text-xs text-slate-500 mt-1">
+                         {autoBreakMinutes > 0 ? `= ${autoBreakMinutes}` : t.off}
+                       </div>
+                     </div>
+                   </div>
+                 </div>
+               </div>
+                         </div>
+                )}
+
+                                                                                                               {/* Enhanced Spotify Widget - Only show on main tournament tab */}
+                                {isAdminMode === false && (
+                                  <div className="spotify-widget bg-gradient-to-br from-slate-800/80 to-slate-900/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg mt-6 min-h-fit">
+                   <div className="flex items-center gap-3 mb-6">
+                     <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg">
+                       <span className="text-2xl">🎵</span>
+                     </div>
+                     <div>
+                       <h2 className="text-2xl font-bold text-slate-100">Spotify Music</h2>
+                       <p className="text-slate-400 text-sm">Set the mood for your tournament</p>
+                     </div>
+                   </div>
+                   
+                   <div className="space-y-6">
+                     {/* Input Section */}
+                     <div className="bg-slate-900/40 rounded-xl p-4 border border-slate-600/50">
+                       <label className="block text-slate-300 text-sm font-medium mb-3">
+                         🎯 Paste a Spotify link below to play music during your tournament:
+                       </label>
+                 <div className="flex gap-3">
+                   <input
+                           className="flex-1 bg-slate-800/60 border border-slate-600 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all"
+                     type="text"
+                     value={spotifyUrl}
+                     onChange={(e) => setSpotifyUrl(e.target.value)}
+                     placeholder="https://open.spotify.com/track/... or https://open.spotify.com/playlist/..."
+                     onKeyPress={(e) => e.key === 'Enter' && handleSpotifyPlay()}
+                   />
+                   <button 
+                           className={`px-6 py-3 rounded-lg font-semibold transition-all transform hover:scale-105 active:scale-95 ${
+                             spotifyUrl.trim() 
+                               ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg' 
+                               : 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                           }`}
+                     onClick={handleSpotifyPlay}
+                           disabled={!spotifyUrl.trim()}
+                   >
+                           {spotifyUrl.trim() ? '▶️ Play' : '🔒 Enter URL'}
+                   </button>
+                       </div>
+                       {spotifyUrl.trim() && (
+                         <div className="mt-3 text-xs text-slate-400">
+                           💡 Press Enter to play instantly
+                         </div>
+                       )}
+                 </div>
+                 
+                     {/* Player Section */}
+                 {currentTrack ? (
+                       <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/40 rounded-xl p-6 border border-slate-600/50 shadow-inner">
+                         <div className="flex items-center justify-between mb-4">
+                           <div className="flex items-center gap-3">
+                             <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center animate-pulse">
+                               <div className="w-2 h-2 bg-white rounded-full"></div>
+                             </div>
+                             <span className="text-slate-200 font-semibold">Now Playing</span>
+                           </div>
+                       <button
+                             className="px-4 py-2 text-sm rounded-lg bg-red-600/80 hover:bg-red-500 text-white font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg"
+                         onClick={() => setCurrentTrack(null)}
+                       >
+                             🛑 Stop
+                       </button>
+                     </div>
+                         
+                                                                        <div className="bg-black/20 rounded-lg p-2 border border-slate-600/30 overflow-hidden h-96">
+                                           <iframe
+                        src={`${extractSpotifyEmbedUrl(currentTrack.url)}?theme=0`}
+                        width="100%"
+                             height="100%"
+                        frameBorder="0"
+                        allowFullScreen=""
+                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                        loading="lazy"
+                             className="rounded-lg w-full h-full"
+                        style={{
+                               backgroundColor: 'transparent',
+                               border: 'none',
+                               outline: 'none'
+                        }}
+                      ></iframe>
+                         </div>
+                        
+                         <div className="mt-4 text-center">
+                           <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-full">
+                             <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                             <span className="text-green-300 text-sm font-medium">Music is playing</span>
+                           </div>
+                         </div>
+                   </div>
+                 ) : (
+                       <div className="bg-gradient-to-br from-slate-900/40 to-slate-800/20 rounded-xl p-8 border border-slate-600/30 text-center">
+                         <div className="w-20 h-20 bg-gradient-to-br from-slate-700 to-slate-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                           <span className="text-4xl">🎵</span>
+                         </div>
+                         <div className="text-slate-200 text-xl font-semibold mb-2">No music playing</div>
+                         <div className="text-slate-400 text-sm mb-4">Paste a Spotify link above and click Play to start</div>
+                         <div className="flex items-center justify-center gap-4 text-xs text-slate-500">
+                           <div className="flex items-center gap-1">
+                             <span>🎧</span>
+                             <span>Supports tracks, playlists & albums</span>
+                           </div>
+                           <div className="flex items-center gap-1">
+                             <span>🎮</span>
+                             <span>Perfect for tournaments</span>
+                           </div>
+                     </div>
+                   </div>
+                 )}
+                     
+                     {/* Quick Actions */}
+                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                       <button 
+                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M')}
+                       >
+                         🎯 Today's Top Hits
+                       </button>
+                       <button 
+                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX5Vy6DFOcx00')}
+                       >
+                         🎸 Rock Classics
+                       </button>
+                       <button 
+                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX4WYpdgoIcn6')}
+                       >
+                         🎵 Chill Vibes
+                       </button>
+               </div>
+             </div>
+                 </div>
+                                )}
+
+                                         {/* Prize Calculator Tab */}
+              {isAdminMode === 'prize' && (
+                <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                  <h2 className="text-2xl font-semibold text-slate-100 mb-6">💰 {t.prizeCalculator}</h2>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Input Section */}
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-slate-300 text-sm block mb-2">{t.prizePool}</label>
+                        <input
+                          className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                          type="number"
+                          min="0"
+                          value={prizePool}
+                          onChange={(e) => setPrizePool(Number(e.target.value))}
+                          placeholder="1000"
+                        />
+                      </div>
+                      
+                                               <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.ratioLabel}</label>
+                           <input
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                             type="text"
+                             value={ratioInput}
+                             onChange={(e) => setRatioInput(e.target.value)}
+                             placeholder={Array.from({ length: numWinners }, (_, i) => 
+                               i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
+                             ).join('/')}
+                           />
+                           <div className="text-xs text-slate-500 mt-1">
+                             Enter {numWinners} numbers separated by / (e.g., {Array.from({ length: numWinners }, (_, i) => 
+                               i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
+                             ).join('/')})
+                           </div>
+                         </div>
+                    </div>
+                    
+                                         {/* Results Section */}
+                     <div className="space-y-4">
+                       {prizeDistribution.map((prize, index) => {
+                         const placeColors = [
+                           { bg: 'from-amber-600/20 to-yellow-600/10', border: 'border-amber-500/30', text: 'text-amber-300', value: 'text-amber-100' },
+                           { bg: 'from-slate-600/20 to-gray-600/10', border: 'border-slate-500/30', text: 'text-slate-300', value: 'text-slate-100' },
+                           { bg: 'from-orange-600/20 to-red-600/10', border: 'border-orange-500/30', text: 'text-orange-300', value: 'text-orange-100' },
+                           { bg: 'from-purple-600/20 to-indigo-600/10', border: 'border-purple-500/30', text: 'text-purple-300', value: 'text-purple-100' },
+                           { bg: 'from-teal-600/20 to-cyan-600/10', border: 'border-teal-500/30', text: 'text-teal-300', value: 'text-teal-100' },
+                           { bg: 'from-pink-600/20 to-rose-600/10', border: 'border-pink-500/30', text: 'text-pink-300', value: 'text-pink-100' },
+                           { bg: 'from-emerald-600/20 to-green-600/10', border: 'border-emerald-500/30', text: 'text-emerald-300', value: 'text-emerald-100' },
+                           { bg: 'from-blue-600/20 to-sky-600/10', border: 'border-blue-500/30', text: 'text-blue-300', value: 'text-blue-100' },
+                           { bg: 'from-violet-600/20 to-purple-600/10', border: 'border-violet-500/30', text: 'text-violet-300', value: 'text-violet-100' },
+                           { bg: 'from-lime-600/20 to-green-600/10', border: 'border-lime-500/30', text: 'text-lime-300', value: 'text-lime-100' }
+                         ]
+                         
+                         const colors = placeColors[index] || placeColors[0]
+                         const placeNames = [
+                           t.firstPlace, t.secondPlace, t.thirdPlace,
+                           '4th Place', '5th Place', '6th Place', '7th Place', '8th Place', '9th Place', '10th Place'
+                         ]
+                         
+                         return (
+                           <div key={index} className={`bg-gradient-to-br ${colors.bg} border ${colors.border} rounded-xl p-6`}>
+                             <div className="text-center mb-4">
+                               <div className={`text-sm ${colors.text} mb-1`}>{placeNames[index]}</div>
+                               <div className={`text-2xl font-bold ${colors.value}`}>${prize}</div>
+                             </div>
+                           </div>
+                         )
+                       })}
+                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Admin Mode - Settings Only */}
+              {isAdminMode === 'admin' && (
+                <div className="space-y-6">
+                  {/* Tournament Settings Section */}
+                  <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                    <h2 className="text-2xl font-semibold text-slate-100 mb-6">⚙️ {t.tournamentSettings}</h2>
+                    
+                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                       {/* Number of Winners Setting */}
+                       <div className="space-y-4">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.numWinners}</label>
+                           <input
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                             type="number"
+                             min="1"
+                             max="10"
+                             value={numWinners}
+                             onChange={(e) => setNumWinners(Number(e.target.value))}
+                             placeholder="3"
+                           />
+                           <div className="text-xs text-slate-500 mt-1">
+                             Number of players who will receive prizes
+                           </div>
+                         </div>
+                       </div>
+                       
+                       {/* Addon Time Setting */}
+                       <div className="space-y-4">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.addonTime}</label>
+                           <input
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                             type="text"
+                             value={addonTime}
+                             onChange={(e) => setAddonTime(e.target.value)}
+                             placeholder="20:30"
+                             pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+                           />
+                           <div className="text-xs text-slate-500 mt-1">
+                             Use 24-hour format (HH:MM). Leave empty to disable. Example: 20:30 for 8:30 PM
+                           </div>
+                         </div>
+                       </div>
+                       
+                       {/* Max Rebuys Setting */}
+                       <div className="space-y-4">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.maxRebuys}</label>
+                           <input
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                             type="number"
+                             min="0"
+                             max="10"
+                             value={maxRebuys}
+                             onChange={(e) => setMaxRebuys(Number(e.target.value))}
+                             placeholder="3"
+                           />
+                           <div className="text-xs text-slate-500 mt-1">
+                             Set to 0 to disable rebuys
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                  </div>
+
+                                     {/* Blind Levels Management Section */}
+                   <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                     <div className="flex items-center justify-between mb-6">
+                   <h2 className="text-2xl font-semibold text-slate-100">⚙️ {t.levelsTitle}</h2>
+                   <div className="flex items-center gap-2">
+                     <button
+                       className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
+                       onClick={addBlindLevel}
+                     >
+                       ➕ {t.addLevel}
+                     </button>
+                     <button
+                       className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-sm"
+                       onClick={resetToDefaults}
+                     >
+                       🔄 {t.resetDefaults}
+                     </button>
+                   </div>
+                 </div>
+                     
+                     {/* Clear Saved Game Button */}
+                     <div className="mt-4 pt-4 border-t border-slate-600">
+                       <button
+                         className="px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm font-medium"
+                         onClick={() => {
+                           if (confirm('Are you sure you want to clear the saved game? This cannot be undone.')) {
+                             localStorage.removeItem('pokerTournamentState')
+                             window.location.reload()
+                           }
+                         }}
+                       >
+                         🗑️ Clear Saved Game
+                       </button>
+                       <div className="text-xs text-slate-400 mt-2">
+                         This will remove all saved progress and restart the application
+                       </div>
+                     </div>
+                     
+                     {/* Reset Players Button */}
+                     <div className="mt-4 pt-4 border-t border-slate-600">
+                       <button
+                         className="px-4 py-2 rounded-md bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium"
+                         onClick={() => {
+                           if (confirm('Are you sure you want to reset all players? This will clear names, rebuys, and eliminated status.')) {
+                             resetPlayers()
+                           }
+                         }}
+                       >
+                         👥 Reset Players
+                       </button>
+                       <div className="text-xs text-slate-400 mt-2">
+                         This will reset player names, rebuys, and eliminated status while keeping tournament progress
+                   </div>
+                 </div>
+                 
+                 <div className="overflow-x-auto">
+                   <table className="min-w-full text-sm">
+                     <thead>
+                       <tr className="text-slate-300">
+                         <th className="text-right py-2 pr-4">{t.level}</th>
+                         <th className="text-right py-2 pr-4">{t.smallBlind}</th>
+                         <th className="text-right py-2 pr-4">{t.bigBlind}</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {levels.map((level, index) => (
+                         <tr key={level.level} className="border-t border-slate-700">
+                           <td className="py-2 pr-4 text-right font-medium">{level.level}</td>
+                           <td className="py-2 pr-4">
+                             <input
+                               className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               type="number"
+                               min="0"
+                               value={level.smallBlind}
+                               onChange={(e) => {
+                                 const newLevels = [...levels]
+                                 newLevels[index].smallBlind = Number(e.target.value)
+                                 setLevels(newLevels)
+                               }}
+                             />
+                           </td>
+                           <td className="py-2 pr-4">
+                             <input
+                               className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                               type="number"
+                               min="0"
+                               value={level.bigBlind}
+                               onChange={(e) => {
+                                 const newLevels = [...levels]
+                                 newLevels[index].bigBlind = Number(e.target.value)
+                                 setLevels(newLevels)
+                               }}
+                             />
+                           </td>
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                   </div>
+                 </div>
+               </div>
+              )}
+               </>
+             )}
+          </div>
+        )
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'))
+      root.render(<App />)
+    </script>
+  </body>
+</html>
