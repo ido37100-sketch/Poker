@@ -5,6 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Poker Tournament Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    
+    <!-- Firebase Configuration -->
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCT09_GK0utPaJfIFdHD6F0qPfv19kCxuA",
+            authDomain: "poker-tournament-manager-f7b51.firebaseapp.com",
+            databaseURL: "https://poker-tournament-manager-f7b51-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "poker-tournament-manager-f7b51",
+            storageBucket: "poker-tournament-manager-f7b51.firebasestorage.app",
+            messagingSenderId: "236754036600",
+            appId: "1:236754036600:web:96c38b1e3ba87fff8c0a8d",
+            measurementId: "G-EFKBQ70BXY"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        // Generate unique room ID for this session
+        const roomId = generateRoomId();
+        
+        function generateRoomId() {
+            // Generate a 6-character room ID
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let result = '';
+            for (let i = 0; i < 6; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        }
+    </script>
+    
     <style>
       :root { color-scheme: dark; }
       body { background-color: rgb(15 23 42); color: rgb(226 232 240); }
@@ -49,6 +85,7 @@
              function App() {
          // Core tournament state
          const [isRunning, setIsRunning] = useState(false)
+         const [gameStarted, setGameStarted] = useState(false) // New: tracks if game has officially started
          const [currentLevelIndex, setCurrentLevelIndex] = useState(0)
          const [remainingSeconds, setRemainingSeconds] = useState(600) // 10 minutes default
          const [minutesPerLevel, setMinutesPerLevel] = useState(10)
@@ -65,6 +102,15 @@
          
          // Player management
          const [numPlayers, setNumPlayers] = useState(6)
+         
+         // Wrapper function to prevent player count changes after game starts
+         const updateNumPlayers = (newCount) => {
+           if (gameStarted) {
+             console.log('🚫 Cannot change player count after game has started')
+             return
+           }
+           setNumPlayers(newCount)
+         }
          const [players, setPlayers] = useState(() => 
            Array.from({ length: 6 }, (_, i) => ({ 
              id: i + 1, 
@@ -78,24 +124,39 @@
          const [levels, setLevels] = useState([
            { level: 1, smallBlind: 25, bigBlind: 50 },
            { level: 2, smallBlind: 50, bigBlind: 100 },
-           { level: 3, smallBlind: 75, bigBlind: 150 },
-           { level: 4, smallBlind: 100, bigBlind: 200 },
-           { level: 5, smallBlind: 150, bigBlind: 300 },
-           { level: 6, smallBlind: 200, bigBlind: 400 }
+           { level: 3, smallBlind: 100, bigBlind: 200 },
+           { level: 4, smallBlind: 200, bigBlind: 400 },
+           { level: 5, smallBlind: 400, bigBlind: 800 },
+           { level: 6, smallBlind: 800, bigBlind: 1600 },
+           { level: 7, smallBlind: 1600, bigBlind: 3200 },
+           { level: 8, smallBlind: 3200, bigBlind: 6400 },
+           { level: 9, smallBlind: 6400, bigBlind: 12800 },
+           { level: 10, smallBlind: 12800, bigBlind: 25600 },
+           { level: 11, smallBlind: 25600, bigBlind: 51200 },
+           { level: 12, smallBlind: 51200, bigBlind: 102400 }
          ])
+         
+         // User default blind levels
+         const [userDefaultLevels, setUserDefaultLevels] = useState(null)
          
                             // App access control
          const [isAppUnlocked, setIsAppUnlocked] = useState(false)
          const [showAppLogin, setShowAppLogin] = useState(true)
          const [appPassword, setAppPassword] = useState('')
+         const [selectedAction, setSelectedAction] = useState(null) // 'new' or 'load'
+         const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent interference during restore
          
          // Admin mode
          const [isAdminMode, setIsAdminMode] = useState(false)
          const [showAdminLogin, setShowAdminLogin] = useState(false)
          const [adminPassword, setAdminPassword] = useState('')
-         const [requestedAdminMode, setRequestedAdminMode] = useState(null)
-          
-          // Tournament settings
+                    const [requestedAdminMode, setRequestedAdminMode] = useState(null)
+           
+           // Addon break system
+           const [addonBreakTriggered, setAddonBreakTriggered] = useState(false)
+           const [addonBreakPending, setAddonBreakPending] = useState(false)
+           
+           // Tournament settings
           const [maxRebuys, setMaxRebuys] = useState(3)
           const [addonTime, setAddonTime] = useState('')
           const [numWinners, setNumWinners] = useState(3)
@@ -104,12 +165,33 @@
          const [prizePool, setPrizePool] = useState(1000)
          const [ratioInput, setRatioInput] = useState('50/30/20')
          
+         // Tournament pricing
+         const [buyInPrice, setBuyInPrice] = useState(50)
+         const [rebuyPrice, setRebuyPrice] = useState(50)
+         const [currency, setCurrency] = useState('USD')
+           const [lowestChipValue, setLowestChipValue] = useState(25)
+         const [desiredNumberOfLevels, setDesiredNumberOfLevels] = useState(12)
+         
          // Spotify
          const [spotifyUrl, setSpotifyUrl] = useState('')
          const [currentTrack, setCurrentTrack] = useState(null)
          
          // Language
          const [lang, setLang] = useState('he')
+         
+         // Firebase real-time sync
+         const [isConnected, setIsConnected] = useState(false)
+         const [lastUpdateTime, setLastUpdateTime] = useState(null)
+         const [joinRoomCode, setJoinRoomCode] = useState('')
+         
+         // Currency configuration
+         const currencySymbols = {
+           USD: '$',
+           EUR: '€',
+           NIS: '₪'
+         }
+         
+         const getCurrencySymbol = () => currencySymbols[currency] || '$'
           
           // Fullscreen state
           const [isFullscreen, setIsFullscreen] = useState(false)
@@ -120,56 +202,153 @@
          const elapsedIntervalRef = useRef(null)
          const audioRef = useRef(null)
          
-                   // Load saved game state on component mount
+         // Firebase real-time database functions
+         const getCurrentRoomId = () => {
+           return window.roomId || roomId
+         }
+         
+         const syncGameState = (gameData) => {
+           const currentRoomId = getCurrentRoomId()
+           const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
+           gameStateRef.set({
+             ...gameData,
+             lastUpdated: Date.now(),
+             updatedBy: 'local'
+           })
+         }
+         
+         const listenToGameUpdates = () => {
+           const currentRoomId = getCurrentRoomId()
+           const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
+           gameStateRef.on('value', (snapshot) => {
+             const data = snapshot.val()
+             if (data && data.updatedBy !== 'local') {
+               // Update local state with remote changes
+               setLastUpdateTime(data.lastUpdated)
+               if (data.players) setPlayers(data.players)
+               if (data.eliminatedIds) setEliminatedIds(data.eliminatedIds)
+               if (data.rebuyCounts) setRebuyCounts(data.rebuyCounts)
+               if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
+               if (data.remainingSeconds !== undefined) setRemainingSeconds(data.remainingSeconds)
+               if (data.isRunning !== undefined) setIsRunning(data.isRunning)
+               if (data.gameStarted !== undefined) setGameStarted(data.gameStarted)
+               if (data.breakSeconds !== undefined) setBreakSeconds(data.breakSeconds)
+               if (data.isOnBreak !== undefined) setIsOnBreak(data.isOnBreak)
+               if (data.addonBreakTriggered !== undefined) setAddonBreakTriggered(data.addonBreakTriggered)
+               if (data.addonBreakPending !== undefined) setAddonBreakPending(data.addonBreakPending)
+               if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
+               if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
+             }
+           })
+         }
+         
+         const updateConnectionStatus = () => {
+           const connectedRef = database.ref('.info/connected')
+           connectedRef.on('value', (snap) => {
+             const connected = snap.val()
+             setIsConnected(connected)
+             
+             // Update UI
+             const statusElement = document.getElementById('connectionStatus')
+             if (statusElement) {
+               if (connected) {
+                 statusElement.className = 'bg-green-600 px-3 py-2 rounded-lg text-sm'
+                 statusElement.innerHTML = '<span>Connected</span>'
+                 
+                 // Update room display
+                 const roomElement = document.querySelector('[data-room-id]')
+                 if (roomElement) {
+                   roomElement.textContent = `Room: ${roomId}`
+                 }
+               } else {
+                 statusElement.className = 'bg-red-600 px-3 py-2 rounded-lg text-sm'
+                 statusElement.innerHTML = '<span>Disconnected</span>'
+               }
+             }
+           })
+         }
+         
+         const joinRoom = () => {
+           if (!joinRoomCode.trim() || joinRoomCode.length !== 6) {
+             alert(t.enterValidRoomCode)
+             return
+           }
+           
+           // Update the global roomId
+           window.roomId = joinRoomCode.toUpperCase()
+           
+           // Update local state
+           setJoinRoomCode('')
+           
+           // Reconnect to the new room
+           const gameStateRef = database.ref(`rooms/${joinRoomCode.toUpperCase()}/gameState`)
+           
+           // Listen for updates in the new room
+           gameStateRef.on('value', (snapshot) => {
+             const data = snapshot.val()
+             if (data) {
+               // Update local state with room data
+               if (data.players) setPlayers(data.players)
+               if (data.eliminatedIds) setEliminatedIds(data.eliminatedIds)
+               if (data.rebuyCounts) setRebuyCounts(data.rebuyCounts)
+               if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
+               if (data.remainingSeconds !== undefined) setRemainingSeconds(data.remainingSeconds)
+               if (data.isRunning !== undefined) setIsRunning(data.isRunning)
+               if (data.gameStarted !== undefined) setGameStarted(data.gameStarted)
+               if (data.breakSeconds !== undefined) setBreakSeconds(data.breakSeconds)
+               if (data.isOnBreak !== undefined) setIsOnBreak(data.isOnBreak)
+               if (data.addonBreakTriggered !== undefined) setAddonBreakTriggered(data.addonBreakTriggered)
+               if (data.addonBreakPending !== undefined) setAddonBreakPending(data.addonBreakPending)
+               if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
+               if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
+               
+               console.log(`🎮 Joined room ${joinRoomCode.toUpperCase()} successfully!`)
+             } else {
+               console.log(`🏠 Room ${joinRoomCode.toUpperCase()} is empty - starting fresh game`)
+             }
+           })
+           
+           // Update the room display
+           const roomElement = document.querySelector('[data-room-id]')
+           if (roomElement) {
+             roomElement.textContent = `Room: ${joinRoomCode.toUpperCase()}`
+           }
+         }
+         
+         // Load saved game state on component mount
          useEffect(() => {
-            const savedState = localStorage.getItem('pokerTournamentState')
-            if (savedState) {
-              try {
-                const gameState = JSON.parse(savedState)
-                
-                // Restore all the important game state
-                // Always require password on app startup for security
-                setIsAppUnlocked(false)
-                setShowAppLogin(true)
-                setIsRunning(gameState.isRunning || false)
-                setCurrentLevelIndex(gameState.currentLevelIndex || 0)
-                setRemainingSeconds(gameState.remainingSeconds || 600)
-                setMinutesPerLevel(gameState.minutesPerLevel || 10)
-                setTimeFormat(gameState.timeFormat || 'minutes')
-                setTimePerLevelMMSS(gameState.timePerLevelMMSS || '10:00')
-                setElapsedSeconds(gameState.elapsedSeconds || 0)
-                setBreakSeconds(gameState.breakSeconds || 0)
-                setIsOnBreak(gameState.isOnBreak || false)
-                setAutoBreakMinutes(gameState.autoBreakMinutes || 0)
-                setNumPlayers(gameState.numPlayers || 6)
-                
-                // Restore players with their exact saved data
-                if (gameState.players && gameState.players.length > 0) {
-                  setPlayers(gameState.players)
-                }
-                
-                setEliminatedIds(gameState.eliminatedIds || [])
-                setRebuyCounts(gameState.rebuyCounts || {})
-                setLevels(gameState.levels || [
-                  { level: 1, smallBlind: 25, bigBlind: 50 },
-                  { level: 2, smallBlind: 50, bigBlind: 100 },
-                  { level: 3, smallBlind: 75, bigBlind: 150 },
-                  { level: 4, smallBlind: 100, bigBlind: 200 },
-                  { level: 5, smallBlind: 150, bigBlind: 300 },
-                  { level: 6, smallBlind: 200, bigBlind: 400 }
-                ])
-                setMaxRebuys(gameState.maxRebuys || 3)
-                setNumWinners(gameState.numWinners || 3)
-                setAddonTime(gameState.addonTime || '')
-                setPrizePool(gameState.prizePool || 1000)
-                setRatioInput(gameState.ratioInput || '50/30/20')
-                setSpotifyUrl(gameState.spotifyUrl || '')
-                setCurrentTrack(gameState.currentTrack || null)
-                
-                console.log('🎮 Game state restored successfully!')
+            // Don't automatically restore saved state on mount
+            // Let the user choose what to do via the start window
+         }, [])
+         
+         // Initialize Firebase listeners
+         useEffect(() => {
+           // Start listening to game updates
+           listenToGameUpdates()
+           
+           // Monitor connection status
+           updateConnectionStatus()
+           
+           // Cleanup listeners on unmount
+           return () => {
+             const currentRoomId = getCurrentRoomId()
+             const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
+             gameStateRef.off()
+             
+             const connectedRef = database.ref('.info/connected')
+             connectedRef.off()
+           }
+         }, [])
+         
+         // Load user default blind levels on component mount
+         useEffect(() => {
+           const savedUserDefaults = localStorage.getItem('userDefaultBlindLevels')
+           if (savedUserDefaults) {
+             try {
+               const parsed = JSON.parse(savedUserDefaults)
+               setUserDefaultLevels(parsed)
               } catch (error) {
-                console.error('❌ Error restoring game state:', error)
-                localStorage.removeItem('pokerTournamentState')
+               console.error('Error loading user default blind levels:', error)
               }
             }
          }, [])
@@ -207,6 +386,9 @@
              level: 'רמה',
              addLevel: 'הוסף רמה',
              resetDefaults: 'איפוס לברירות מחדל',
+             saveUserDefaults: 'שמור כברירת מחדל אישית',
+             restoreUserDefaults: 'שחזר ברירת מחדל אישית',
+             clearUserDefaults: 'מחק ברירות מחדל אישיות',
              exitAdmin: 'יציאה מניהול',
              tournamentSettings: 'הגדרות טורניר',
              maxRebuys: 'מקסימום Rebuys',
@@ -245,7 +427,161 @@
              startNewGame: 'משחק חדש',
              noSavedGame: 'לא נמצא משחק שמור',
              savedGameInfo: 'נמצא משחק שמור מ',
-             savedGameDetails: 'שחקנים, רמה'
+             savedGameDetails: 'שחקנים, רמה',
+             
+             // New translations for untranslated text
+             buyInPrice: 'מחיר כניסה',
+             rebuyPrice: 'מחיר רכישה חוזרת',
+             currency: 'מטבע',
+             winnersHelper: 'מספר השחקנים שיקבלו פרסים',
+             addonTimeHelper: 'השתמש בפורמט 24 שעות (שעה:דקות). השאר ריק לביטול. דוגמה: 20:30 ל-8:30 בערב',
+             rebuysHelper: 'הגדר ל-0 לביטול רכישות חוזרות',
+             buyInHelper: 'מחיר לכל שחקן להיכנס לטורניר',
+             rebuyHelper: 'מחיר לכל רכישה חוזרת (זהה למחיר כניסה כברירת מחדל)',
+             currencyHelper: 'בחר את המטבע למחירי הטורניר',
+             clearSavedGame: 'נקה משחק שמור',
+             resetPlayers: 'אפס שחקנים',
+             clearGameHelper: 'זה יסיר את כל ההתקדמות השמורה ויפעיל מחדש את האפליקציה',
+             resetPlayersHelper: 'זה יאפס שמות שחקנים, רכישות חוזרות וסטטוס חיסול תוך שמירה על התקדמות הטורניר',
+             fullscreen: 'מסך מלא',
+             exitFullscreen: 'צא ממסך מלא',
+             login: 'התחברות',
+             password: 'סיסמה:',
+             buyInsLabel: 'רכישות:',
+             rebuysLabel: 'רכישות חוזרות:',
+             formulaExplanation: 'מחיר כניסה × מספר שחקנים + מחיר רכישה חוזרת × סה"כ רכישות חוזרות',
+             lowestChipValue: 'ערך השבב הנמוך ביותר',
+             lowestChipHelper: 'הכנס את הערך הנמוך ביותר בשבבים שלך (למשל: 1, 5, 10, 25)',
+             generateBlinds: 'צור רמות בליינדים',
+             generateBlindsHelper: 'יצור אוטומטית רמות בליינדים מבוססות על ערך השבב הנמוך ביותר',
+             removeLevel: 'הסר רמה',
+             removeLevelHelper: 'הסר את הרמה האחרונה מהטורניר',
+             infinite: '∞',
+             numberOfLevels: 'מספר רמות',
+             numberOfLevelsHelper: 'הכנס את מספר רמות הבליינדים הרצוי',
+             calculateLevels: 'חשב רמות',
+             
+             // Additional translations for remaining English text
+             readyToStart: '?מוכן להתחיל את הטורניר',
+             startGame: 'התחל משחק',
+             startGameLocked: 'זה ינעול שמות שחקנים, מיקומים ומספר שחקנים',
+             tournamentStarted: 'הטורניר התחיל - הגדרות נעולות',
+             startGameFirst: 'התחל משחק קודם',
+             reset: 'אפס',
+             tournamentActive: 'טורניר פעיל',
+             tournamentSetup: 'הגדרת טורניר',
+             maxRebuysLabel: 'מקסימום רכישות חוזרות:',
+             addonTimeLabel: 'זמן Addon:',
+             addonBreakStatus: 'סטטוס הפסקת Addon:',
+             tournamentPricing: 'מחירי טורניר:',
+             buyInLabel: 'רכישה:',
+             rebuyLabel: 'רכישה חוזרת:',
+             currentRebuys: 'רכישות חוזרות נוכחיות:',
+             totalPrizePool: 'סה"כ פרסים:',
+             waitingForLevelEnd: 'ממתין לסוף הרמה',
+             active: 'פעיל',
+             waiting: 'ממתין',
+             pause: 'השהה',
+             resume: 'המשך',
+             out: 'יצא',
+             in: 'בפנים',
+             locked: 'נעול',
+             rebuys: 'רכישות חוזרות:',
+             maxReached: 'מקסימום הגיע',
+             seatingLocked: 'ישיבה נעולה',
+             playerControlsLocked: 'בקרות השחקנים ייפתחו כאשר תתחיל את המשחק ותנעול את הגדרות הטורניר',
+             applySettings: 'החל הגדרות',
+             finalLevel: 'רמה אחרונה - טורניר נמשך!',
+             addonBreakPending: 'הפסקת Addon ממתינה לסוף הרמה הנוכחית',
+             addonIn: 'Addon בעוד',
+             addonTime: 'זמן Addon!',
+             noAddonTimeSet: 'לא הוגדר זמן Addon',
+             addonBreakActive: 'הפסקת Addon פעילה',
+             addonBreakWaiting: 'הפסקת Addon ממתינה',
+             addonBreakStatusWaiting: 'ממתין לסוף הרמה',
+             addonBreakStatusActive: 'פעיל',
+             addonBreakStatusWaiting: 'ממתין',
+             spotifyMusic: 'מוזיקת Spotify',
+             setMood: 'קבע את האווירה לטורניר שלך',
+             pasteSpotifyLink: 'הדבק קישור Spotify למטה כדי לנגן מוזיקה במהלך הטורניר שלך:',
+             play: '▶️ נגן',
+             enterUrl: '🔒 הכנס כתובת',
+             pressEnter: '💡 לחץ Enter לנגינה מיידית',
+             nowPlaying: 'מתנגן עכשיו',
+             stop: '🛑 עצור',
+             musicPlaying: 'מוזיקה מתנגנת',
+             noMusicPlaying: 'לא מתנגנת מוזיקה',
+             pasteLinkAndPlay: 'הדבק קישור Spotify למעלה ולחץ על נגן כדי להתחיל',
+             supportsTracks: 'תומך בשירים, רשימות השמעה ואלבומים',
+             perfectForTournaments: 'מושלם לטורנירים',
+             todaysTopHits: 'הלהיטים המובילים של היום',
+             rockClassics: 'קלאסיקות רוק',
+             chillVibes: 'אווירה רגועה',
+             automaticPrizeCalculation: 'חישוב פרסים אוטומטי',
+             prizePoolAutoCalc: 'סה"כ הפרסים מחושב אוטומטית בהתבסס על הגדרות הטורניר שלך: עדכון המחירים בהגדרות הטורניר לראות שינויים בזמן אמת.',
+             enterNumbersSeparated: 'הכנס {numWinners} מספרים מופרדים ב- / (למשל: {example})',
+             place4th: 'מקום 4',
+             place5th: 'מקום 5',
+             place6th: 'מקום 6',
+             place7th: 'מקום 7',
+             place8th: 'מקום 8',
+             place9th: 'מקום 9',
+             place10th: 'מקום 10',
+             tournamentSetupMode: 'מצב הגדרות טורניר',
+             canStillModify: 'עדיין תוכל לשנות שמות שחקנים, ישיבה ומספר שחקנים. ברגע שתלחץ על "התחל משחק" בתצוגת הטורניר הראשית, הגדרות אלה יינעלו.',
+             tournamentActiveSettingsLocked: 'טורניר פעיל - הגדרות נעולות',
+             tournamentStartedSettingsLocked: 'הטורניר התחיל. שמות שחקנים, ישיבה ומספר שחקנים כעת נעולים לשלמות.',
+             addonTimeInPast: 'זמן Addon בעבר - שנה לשעה עתידית',
+             addonTimeValid: 'זמן Addon תקין',
+             cannotStartWithPastAddon: 'לא ניתן להתחיל משחק עם זמן Addon בעבר. שנה את הזמן לשעה עתידית.',
+             personalDefaultsAvailable: 'ברירות מחדל אישיות זמינות',
+             levels: 'רמות',
+             chip: 'שבב',
+             addonBreakReset: 'אפס מצב הפסקת Addon',
+             lockedUntilGameStarts: 'נעול עד תחילת המשחק',
+             testAddonBreak: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystem: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakHelper: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelper: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText2: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText3: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText4: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText5: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText6: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText7: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText8: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText9: 'בדוק מערכת הפסקת Addon',
+             testAddonBreakSystemHelperText10: 'בדוק מערכת הפסקת Addon',
+             enterPasswordForNewGame: 'הכנס סיסמה למשחק חדש:',
+             enterPasswordForSavedGame: 'הכנס סיסמה למשחק השמור:',
+             newGameReady: 'משחק חדש מוכן! הכנס סיסמה כדי להתחיל.',
+             confirmNewGame: 'האם אתה בטוח שברצונך להתחיל משחק חדש? זה יאפס הכל לערכים ברירת מחדל.',
+             confirmClearSavedGame: 'האם אתה בטוח שברצונך לנקות את המשחק השמור? לא ניתן לבטל פעולה זו.',
+             confirmResetPlayers: 'האם אתה בטוח שברצונך לאפס את כל השחקנים? זה ינקה שמות, רכישות חוזרות וסטטוס חיסול.',
+             confirmResetAddonBreak: 'האם אתה בטוח שברצונך לאפס את מצב הפסקת Addon? זה יאפשר להפעיל מחדש את הפסקת Addon.',
+             confirmTestAddonBreak: 'האם אתה בטוח שברצונך לבדוק את מערכת הפסקת Addon? זה יאתחל הפסקה של 15 דקות.',
+             incorrectPassword: 'סיסמה שגויה!',
+             errorReadingSavedGame: 'שגיאה בקריאת המשחק השמור',
+             pleaseEnterValidSpotifyUrl: 'אנא הכנס כתובת Spotify תקינה',
+             addonTimePastError: 'שגיאה: זמן Addon שהוגדר הוא בעבר. אנא שנה את זמן Addon לשעה עתידית לפני התחלת המשחק.',
+             addonTimeReached: 'זמן Addon הגיע! הפסקה של 15 דקות תתחיל בסוף הרמה הנוכחית.',
+             addonBreakStartingNow: 'הפסקת Addon של 15 דקות מתחילה עכשיו!',
+             confirmStartGame: 'האם אתה בטוח שברצונך להתחיל את המשחק? זה ינעול שמות שחקנים, מיקומים ומספר שחקנים למשך הטורניר.',
+             chipValueMustBeGreaterThanZero: 'ערך השבב חייב להיות גדול מ-0',
+             numberOfLevelsMustBeGreaterThanZero: 'מספר הרמות חייב להיות גדול מ-0',
+             blindLevelListSavedAsPersonalDefault: 'רשימת רמות הבליינד נשמרה כברירת מחדל אישית!',
+             personalBlindLevelListRestored: 'רשימת רמות הבליינד האישית שוחזרה!',
+             noPersonalDefaultsFound: 'לא נמצאו ברירות מחדל אישיות. שמור קודם רשימת רמות כברירת מחדל אישית.',
+             personalDefaultsCleared: 'ברירות המחדל האישיות נמחקו!',
+             adminAccess: 'גישת מנהל',
+             enterPasswordPlaceholder: 'הכנס סיסמה',
+             openRecentGame: 'פתח משחק אחרון',
+             joinDifferentRoom: 'הצטרף לחדר אחר:',
+             enterRoomCode: 'הכנס קוד חדר (למשל ABC123)',
+             joinRoom: 'הצטרף לחדר',
+             enterValidRoomCode: 'אנא הכנס קוד חדר תקין של 6 תווים',
+             roomCodeHelper: 'הכנס קוד חדר של 6 תווים כדי להצטרף למשחק קיים'
            },
            en: {
              title: 'Poker Management',
@@ -273,6 +609,9 @@
              level: 'Level',
              addLevel: 'Add Level',
              resetDefaults: 'Reset to Defaults',
+             saveUserDefaults: 'Save as Personal Default',
+             restoreUserDefaults: 'Restore Personal Default',
+             clearUserDefaults: 'Clear Personal Defaults',
              exitAdmin: 'Exit Admin',
               tournamentSettings: 'Tournament Settings',
               maxRebuys: 'Max Rebuys',
@@ -311,7 +650,161 @@
              startNewGame: 'Start New Game',
              noSavedGame: 'No saved game found',
              savedGameInfo: 'Saved game found from',
-             savedGameDetails: 'players, level'
+             savedGameDetails: 'players, level',
+             
+             // New translations for untranslated text
+             buyInPrice: 'Buy-in Price',
+             rebuyPrice: 'Rebuy Price',
+             currency: 'Currency',
+             winnersHelper: 'Number of players who will receive prizes',
+             addonTimeHelper: 'Use 24-hour format (HH:MM). Leave empty to disable. Example: 20:30 for 8:30 PM',
+             rebuysHelper: 'Set to 0 to disable rebuys',
+             buyInHelper: 'Price per player to enter the tournament',
+             rebuyHelper: 'Price for each rebuy (same as buy-in by default)',
+             currencyHelper: 'Select the currency for tournament pricing',
+             clearSavedGame: 'Clear Saved Game',
+             resetPlayers: 'Reset Players',
+             clearGameHelper: 'This will remove all saved progress and restart the application',
+             resetPlayersHelper: 'This will reset player names, rebuys, and eliminated status while keeping tournament progress',
+             fullscreen: 'Fullscreen',
+             exitFullscreen: 'Exit Fullscreen',
+             login: 'Login',
+             password: 'Password:',
+             buyInsLabel: 'Buy-ins:',
+             rebuysLabel: 'Rebuys:',
+             formulaExplanation: 'Buy-in Price × Number of Players + Rebuy Price × Total Rebuys',
+             lowestChipValue: 'Lowest Chip Value',
+             lowestChipHelper: 'Enter the lowest value chip in your set (e.g., 1, 5, 10, 25)',
+             generateBlinds: 'Generate Blind Levels',
+             generateBlindsHelper: 'Automatically generate blind levels based on the lowest chip value',
+             removeLevel: 'Remove Level',
+             removeLevelHelper: 'Remove the last level from the tournament',
+             infinite: '∞',
+             numberOfLevels: 'Number of Levels',
+             numberOfLevelsHelper: 'Enter the desired number of blind levels',
+             calculateLevels: 'Calculate Levels',
+             
+             // Additional translations for remaining English text
+             readyToStart: 'Ready to start the tournament?',
+             startGame: 'START GAME',
+             startGameLocked: 'This will lock player names, positions, and player count',
+             tournamentStarted: 'Tournament Started - Settings Locked',
+             startGameFirst: 'Start Game First',
+             reset: 'Reset',
+             tournamentActive: 'Tournament Active',
+             tournamentSetup: 'Tournament Setup',
+             maxRebuysLabel: 'Max Rebuys:',
+             addonTimeLabel: 'Addon Time:',
+             addonBreakStatus: 'Addon Break Status:',
+             tournamentPricing: 'Tournament Pricing:',
+             buyInLabel: 'Buy-in:',
+             rebuyLabel: 'Rebuy:',
+             currentRebuys: 'Current Rebuys:',
+             totalPrizePool: 'Total Prize Pool:',
+             waitingForLevelEnd: 'Waiting for Level End',
+             active: 'Active',
+             waiting: 'Waiting',
+             pause: 'Pause',
+             resume: 'Resume',
+             out: 'Out',
+             in: 'In',
+             locked: 'Locked',
+             rebuys: 'Rebuys:',
+             maxReached: 'Max Reached',
+             seatingLocked: 'Seating Locked',
+             playerControlsLocked: 'Player controls (rebuys, elimination) will be unlocked when you start the game and lock tournament settings',
+             applySettings: 'Apply Settings',
+             finalLevel: 'Final Level - Tournament Continues!',
+             addonBreakPending: 'Addon Break Pending - End of Current Level',
+             addonIn: 'Addon in',
+             addonTime: 'ADDON TIME!',
+             noAddonTimeSet: 'No addon time set',
+             addonBreakActive: 'Addon Break Active',
+             addonBreakWaiting: 'Addon Break Waiting',
+             addonBreakStatusWaiting: 'Waiting for Level End',
+             addonBreakStatusActive: 'Active',
+             addonBreakStatusWaiting: 'Waiting',
+             spotifyMusic: 'Spotify Music',
+             setMood: 'Set the mood for your tournament',
+             pasteSpotifyLink: 'Paste a Spotify link below to play music during your tournament:',
+             play: '▶️ Play',
+             enterUrl: '🔒 Enter URL',
+             pressEnter: '💡 Press Enter to play instantly',
+             nowPlaying: 'Now Playing',
+             stop: '🛑 Stop',
+             musicPlaying: 'Music is playing',
+             noMusicPlaying: 'No music playing',
+             pasteLinkAndPlay: 'Paste a Spotify link above and click Play to start',
+             supportsTracks: 'Supports tracks, playlists & albums',
+             perfectForTournaments: 'Perfect for tournaments',
+             todaysTopHits: 'Today\'s Top Hits',
+             rockClassics: 'Rock Classics',
+             chillVibes: 'Chill Vibes',
+             automaticPrizeCalculation: 'Automatic Prize Calculation',
+             prizePoolAutoCalc: 'The prize pool is automatically calculated based on your tournament settings: Update the pricing in Tournament Settings to see real-time changes.',
+             enterNumbersSeparated: 'Enter {numWinners} numbers separated by / (e.g., {example})',
+             place4th: '4th Place',
+             place5th: '5th Place',
+             place6th: '6th Place',
+             place7th: '7th Place',
+             place8th: '8th Place',
+             place9th: '9th Place',
+             place10th: '10th Place',
+             tournamentSetupMode: 'Tournament Setup Mode',
+             canStillModify: 'You can still modify player names, seating, and player count. Once you click "Start Game" in the main tournament view, these settings will be locked.',
+             tournamentActiveSettingsLocked: 'Tournament Active - Settings Locked',
+             tournamentStartedSettingsLocked: 'The tournament has started. Player names, seating, and player count are now locked for integrity.',
+             addonTimeInPast: 'Addon time in past - change to future time',
+             addonTimeValid: 'Addon time valid',
+             cannotStartWithPastAddon: 'Cannot start game with past addon time. Change the time to a future time.',
+             personalDefaultsAvailable: 'Personal defaults available',
+             levels: 'levels',
+             chip: 'chip',
+             addonBreakReset: 'Reset Addon Break',
+             lockedUntilGameStarts: 'Locked until game starts',
+             testAddonBreak: 'Test Addon Break',
+             testAddonBreakSystem: 'Test Addon Break System',
+             testAddonBreakHelper: 'Test Addon Break',
+             testAddonBreakSystemHelper: 'Test Addon Break System',
+             testAddonBreakSystemHelperText: 'Test Addon Break System',
+             testAddonBreakSystemHelperText2: 'Test Addon Break System',
+             testAddonBreakSystemHelperText3: 'Test Addon Break System',
+             testAddonBreakSystemHelperText4: 'Test Addon Break System',
+             testAddonBreakSystemHelperText5: 'Test Addon Break System',
+             testAddonBreakSystemHelperText6: 'Test Addon Break System',
+             testAddonBreakSystemHelperText7: 'Test Addon Break System',
+             testAddonBreakSystemHelperText8: 'Test Addon Break System',
+             testAddonBreakSystemHelperText9: 'Test Addon Break System',
+             testAddonBreakSystemHelperText10: 'Test Addon Break System',
+             enterPasswordForNewGame: 'Enter password for new game:',
+             enterPasswordForSavedGame: 'Enter password for saved game:',
+             newGameReady: 'New game ready! Enter password to start.',
+             confirmNewGame: 'Are you sure you want to start a new game? This will reset everything to default values.',
+             confirmClearSavedGame: 'Are you sure you want to clear the saved game? This cannot be undone.',
+             confirmResetPlayers: 'Are you sure you want to reset all players? This will clear names, rebuys, and eliminated status.',
+             confirmResetAddonBreak: 'Are you sure you want to reset the addon break state? This will allow the addon break to trigger again.',
+             confirmTestAddonBreak: 'Are you sure you want to test the addon break system? This will start a 15-minute break.',
+             incorrectPassword: 'Incorrect password!',
+             errorReadingSavedGame: 'Error reading saved game',
+             pleaseEnterValidSpotifyUrl: 'Please enter a valid Spotify URL',
+             addonTimePastError: 'Error: The addon time you set is in the past. Please change the addon time to a future time before starting the game.',
+             addonTimeReached: 'Addon time reached! 15-minute break will start when current level ends.',
+             addonBreakStartingNow: 'Addon break of 15 minutes starting now!',
+             confirmStartGame: 'Are you sure you want to start the game? This will lock player names, positions, and player count for the duration of the tournament.',
+             chipValueMustBeGreaterThanZero: 'Chip value must be greater than 0',
+             numberOfLevelsMustBeGreaterThanZero: 'Number of levels must be greater than 0',
+             blindLevelListSavedAsPersonalDefault: 'Blind level list saved as personal default!',
+             personalBlindLevelListRestored: 'Personal blind level list restored!',
+             noPersonalDefaultsFound: 'No personal defaults found. Save a blind level list as personal default first.',
+             personalDefaultsCleared: 'Personal defaults cleared!',
+             adminAccess: 'Admin Access',
+             enterPasswordPlaceholder: 'Enter password',
+             openRecentGame: 'Open Recent Game',
+             joinDifferentRoom: 'Join Different Room:',
+             enterRoomCode: 'Enter room code (e.g., ABC123)',
+             joinRoom: 'Join Room',
+             enterValidRoomCode: 'Please enter a valid 6-character room code',
+             roomCodeHelper: 'Enter a 6-character room code to join an existing game'
            }
          }), [])
          
@@ -327,10 +820,78 @@
              return (minutes * 60) + (seconds || 0)
            }
          }
+         
+         // Helper function to check if addon time is valid (not in the past)
+         function isAddonTimeValid() {
+           if (!addonTime) return true // No addon time set is considered valid
+           
+           const now = new Date()
+           const currentHour = now.getHours()
+           const currentMinute = now.getMinutes()
+           const [targetHour, targetMinute] = addonTime.split(':').map(Number)
+           
+           if (targetHour === undefined || targetMinute === undefined) return false
+           
+           const currentTotalMinutes = currentHour * 60 + currentMinute
+           const targetTotalMinutes = targetHour * 60 + targetMinute
+           
+           return targetTotalMinutes > currentTotalMinutes
+         }
         
                  // Functions
          function handleStartPause() {
            setIsRunning(!isRunning)
+           // Sync game state to Firebase
+           syncGameState({
+             isRunning: !isRunning,
+             players,
+             eliminatedIds,
+             rebuyCounts,
+             currentLevelIndex,
+             remainingSeconds,
+             gameStarted,
+             breakSeconds,
+             isOnBreak,
+             addonBreakTriggered,
+             addonBreakPending,
+             spotifyUrl,
+             currentTrack
+           })
+         }
+         
+         function startGame() {
+           // Check if addon time is valid (not in the past)
+           if (!isAddonTimeValid()) {
+             if (lang === 'he') {
+               alert('שגיאה: זמן Addon שהוגדר הוא בעבר. אנא שנה את זמן Addon לשעה עתידית לפני התחלת המשחק.')
+             } else {
+               alert(t.addonTimePastError)
+             }
+             return // Prevent game from starting
+           }
+           
+           if (confirm(t.confirmStartGame)) {
+             setGameStarted(true)
+             setIsRunning(true)
+             console.log('🎮 Tournament officially started! Settings locked.')
+             
+             // Sync game state to Firebase
+             syncGameState({
+               isRunning: true,
+               gameStarted: true,
+               players,
+               eliminatedIds,
+               rebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+           }
          }
          
          function handleReset() {
@@ -341,34 +902,122 @@
            // Don't reset elapsed time - keep tournament running time
            setBreakSeconds(0)
            setIsOnBreak(false)
+           // Note: gameStarted remains true - once started, it stays started
          }
          
          function toggleEliminated(id) {
-           setEliminatedIds(prev => 
-             prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-           )
+           setEliminatedIds(prev => {
+             const newEliminatedIds = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+             
+             // Sync game state to Firebase
+             syncGameState({
+               isRunning,
+               gameStarted,
+               players,
+               eliminatedIds: newEliminatedIds,
+               rebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+             
+             return newEliminatedIds
+           })
          }
          
          function addRebuy(id) {
             const currentRebuys = rebuyCounts[id] || 0
             if (currentRebuys < maxRebuys) {
-              setRebuyCounts(prev => ({ ...prev, [id]: currentRebuys + 1 }))
+              setRebuyCounts(prev => {
+                const newRebuyCounts = { ...prev, [id]: currentRebuys + 1 }
+                
+                // Sync game state to Firebase
+                syncGameState({
+                  isRunning,
+                  gameStarted,
+                  players,
+                  eliminatedIds,
+                  rebuyCounts: newRebuyCounts,
+                  currentLevelIndex,
+                  remainingSeconds,
+                  breakSeconds,
+                  isOnBreak,
+                  addonBreakTriggered,
+                  addonBreakPending,
+                  spotifyUrl,
+                  currentTrack
+                })
+                
+                return newRebuyCounts
+              })
             }
          }
          
          function removeRebuy(id) {
-           setRebuyCounts(prev => ({ ...prev, [id]: Math.max(0, (prev[id] || 0) - 1) }))
+           setRebuyCounts(prev => {
+             const newRebuyCounts = { ...prev, [id]: Math.max(0, (prev[id] || 0) - 1) }
+             
+             // Sync game state to Firebase
+             syncGameState({
+               isRunning,
+               gameStarted,
+               players,
+               eliminatedIds,
+               rebuyCounts: newRebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+             
+             return newRebuyCounts
+           })
          }
          
          function updatePlayerName(index, name) {
+           if (gameStarted) {
+             console.log('🚫 Cannot change player names after game has started')
+             return
+           }
            setPlayers(prev => {
              const next = [...prev]
              next[index] = { ...next[index], name }
+             
+             // Sync game state to Firebase
+             syncGameState({
+               isRunning,
+               gameStarted,
+               players: next,
+               eliminatedIds,
+               rebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+             
              return next
            })
          }
          
          function seatRandom() {
+           if (gameStarted) {
+             console.log('🚫 Cannot change seating after game has started')
+             return
+           }
            setPlayers(prev => {
               // Ensure we have the correct number of players
               if (prev.length !== numPlayers) {
@@ -386,6 +1035,25 @@
             // Reset rebuy counts and eliminated status when reseating
             setRebuyCounts({})
             setEliminatedIds([])
+            
+            // Sync game state to Firebase after reseating
+            setTimeout(() => {
+              syncGameState({
+                isRunning,
+                gameStarted,
+                players: players,
+                eliminatedIds: [],
+                rebuyCounts: {},
+                currentLevelIndex,
+                remainingSeconds,
+                breakSeconds,
+                isOnBreak,
+                addonBreakTriggered,
+                addonBreakPending,
+                spotifyUrl,
+                currentTrack
+              })
+            }, 100)
           }
           
           function resetPlayers() {
@@ -395,14 +1063,40 @@
             })))
             setRebuyCounts({})
             setEliminatedIds([])
+            
+            // Sync game state to Firebase
+            setTimeout(() => {
+              syncGameState({
+                isRunning,
+                gameStarted,
+                players: Array.from({ length: numPlayers }, (_, i) => ({ 
+                  id: i + 1, 
+                  name: t.playerPlaceholder(i + 1)
+                })),
+                eliminatedIds: [],
+                rebuyCounts: {},
+                currentLevelIndex,
+                remainingSeconds,
+                breakSeconds,
+                isOnBreak,
+                addonBreakTriggered,
+                addonBreakPending,
+                spotifyUrl,
+                currentTrack
+              })
+            }, 100)
           }
           
           function newGame() {
-            if (confirm('Are you sure you want to start a new game? This will reset everything to default values.')) {
-              // Reset all tournament state
+            if (confirm(t.confirmNewGame)) {
+              // Clear saved game state
+        localStorage.removeItem('pokerTournamentState')
+        
+        // Reset all tournament state
               setIsAppUnlocked(false)
               setShowAppLogin(true)
               setIsRunning(false)
+              setGameStarted(false)
               setCurrentLevelIndex(0)
               setRemainingSeconds(600)
               setMinutesPerLevel(10)
@@ -412,6 +1106,8 @@
               setBreakSeconds(0)
               setIsOnBreak(false)
               setAutoBreakMinutes(0)
+              setAddonBreakTriggered(false)
+              setAddonBreakPending(false)
               setNumPlayers(6)
               setPlayers(Array.from({ length: 6 }, (_, i) => ({ 
                 id: i + 1, 
@@ -422,23 +1118,31 @@
               setLevels([
                 { level: 1, smallBlind: 25, bigBlind: 50 },
                 { level: 2, smallBlind: 50, bigBlind: 100 },
-                { level: 3, smallBlind: 75, bigBlind: 150 },
-                { level: 4, smallBlind: 100, bigBlind: 200 },
-                { level: 5, smallBlind: 150, bigBlind: 300 },
-                { level: 6, smallBlind: 200, bigBlind: 400 }
+                { level: 3, smallBlind: 100, bigBlind: 200 },
+                { level: 4, smallBlind: 200, bigBlind: 400 },
+                { level: 5, smallBlind: 400, bigBlind: 800 },
+                { level: 6, smallBlind: 800, bigBlind: 1600 },
+                { level: 7, smallBlind: 1600, bigBlind: 3200 },
+                { level: 8, smallBlind: 3200, bigBlind: 6400 },
+                { level: 9, smallBlind: 6400, bigBlind: 12800 },
+                { level: 10, smallBlind: 12800, bigBlind: 25600 },
+                { level: 11, smallBlind: 25600, bigBlind: 51200 },
+                { level: 12, smallBlind: 51200, bigBlind: 102400 }
               ])
               setMaxRebuys(3)
               setNumWinners(3)
               setAddonTime('')
               setPrizePool(1000)
               setRatioInput('50/30/20')
+                      setBuyInPrice(50)
+        setRebuyPrice(50)
+        setCurrency('USD')
+         setLowestChipValue(25)
+         setDesiredNumberOfLevels(12)
               setSpotifyUrl('')
               setCurrentTrack(null)
               
-              // Clear saved game state
-              localStorage.removeItem('pokerTournamentState')
-              
-              console.log('🎮 New game started! All settings reset to defaults.')
+
             }
          }
          
@@ -446,7 +1150,27 @@
          function startBreak(minutes) {
            setBreakSeconds(minutes * 60)
            setIsOnBreak(true)
-           setIsRunning(false)
+           setIsRunning(false) // Pause the blind timer
+           console.log(`🔄 Break started: ${minutes} minutes`)
+           
+           // Sync game state to Firebase
+           setTimeout(() => {
+             syncGameState({
+               isRunning: false,
+               gameStarted,
+               players,
+               eliminatedIds,
+               rebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds: minutes * 60,
+               isOnBreak: true,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+           }, 100)
          }
          
          function toggleBreakPause() {
@@ -456,6 +1180,25 @@
                 setIsRunning(false)
               }
              setIsOnBreak(!isOnBreak)
+             
+             // Sync game state to Firebase
+             setTimeout(() => {
+               syncGameState({
+                 isRunning: false,
+                 gameStarted,
+                 players,
+                 eliminatedIds,
+                 rebuyCounts,
+                 currentLevelIndex,
+                 remainingSeconds,
+                 breakSeconds,
+                 isOnBreak: !isOnBreak,
+                 addonBreakTriggered,
+                 addonBreakPending,
+                 spotifyUrl,
+                 currentTrack
+               })
+             }, 100)
            }
          }
          
@@ -502,7 +1245,7 @@
            } catch (error) {
              console.log('Audio playback failed:', error)
              // Simple fallback alert
-             console.log('🔔 Tournament notification!')
+
            }
          }
          
@@ -512,25 +1255,169 @@
               document.documentElement.requestFullscreen().then(() => {
                 setIsFullscreen(true)
               }).catch(err => {
-                console.log('Error attempting to enable fullscreen:', err)
+                // Fullscreen error handled silently
               })
             } else {
               document.exitFullscreen().then(() => {
                 setIsFullscreen(false)
               }).catch(err => {
-                console.log('Error attempting to exit fullscreen:', err)
+                // Fullscreen error handled silently
               })
+            }
+          }
+          
+                                      // Function to restore saved game state
+         function restoreSavedGameState() {
+           // Get the saved state
+           const savedState = localStorage.getItem('pokerTournamentState')
+           
+           if (savedState) {
+             try {
+               const gameState = JSON.parse(savedState)
+               
+               // RESTORE ALL IMPORTANT GAME STATE
+               if (gameState.players) {
+                 setPlayers(gameState.players)
+               }
+               
+               if (gameState.eliminatedIds) {
+                 setEliminatedIds(gameState.eliminatedIds)
+               }
+               
+               if (gameState.rebuyCounts) {
+                 setRebuyCounts(gameState.rebuyCounts)
+               }
+               
+               if (gameState.currentLevelIndex !== undefined) {
+                 setCurrentLevelIndex(gameState.currentLevelIndex)
+               }
+               
+               if (gameState.remainingSeconds !== undefined) {
+                 setRemainingSeconds(gameState.remainingSeconds)
+               }
+               
+               // Restore time settings
+               if (gameState.timeFormat !== undefined) {
+                 setTimeFormat(gameState.timeFormat)
+               }
+               
+               if (gameState.timePerLevelMMSS !== undefined) {
+                 setTimePerLevelMMSS(gameState.timePerLevelMMSS)
+               }
+               
+               if (gameState.minutesPerLevel !== undefined) {
+                 setMinutesPerLevel(gameState.minutesPerLevel)
+               }
+               
+               if (gameState.autoBreakMinutes !== undefined) {
+                 setAutoBreakMinutes(gameState.autoBreakMinutes)
+               }
+               
+               if (gameState.breakSeconds !== undefined) {
+                 setBreakSeconds(gameState.breakSeconds)
+               }
+               
+               if (gameState.isOnBreak !== undefined) {
+                 setIsOnBreak(gameState.isOnBreak)
+               }
+               
+               if (gameState.elapsedSeconds !== undefined) {
+                 setElapsedSeconds(gameState.elapsedSeconds)
+               }
+               
+               if (gameState.addonTime !== undefined) {
+                 setAddonTime(gameState.addonTime)
+               }
+               
+               // Restore addon break state
+               if (gameState.addonBreakTriggered !== undefined) {
+                 setAddonBreakTriggered(gameState.addonBreakTriggered)
+               }
+               
+               if (gameState.addonBreakPending !== undefined) {
+                 setAddonBreakPending(gameState.addonBreakPending)
+               }
+               
+               if (gameState.numWinners !== undefined) {
+                 setNumWinners(gameState.numWinners)
+               }
+               
+               if (gameState.prizePool !== undefined) {
+                 setPrizePool(gameState.prizePool)
+               }
+               
+               if (gameState.ratioInput !== undefined) {
+                 setRatioInput(gameState.ratioInput)
+               }
+               
+               // CRITICAL: Restore game state to lock settings
+               if (gameState.gameStarted !== undefined) {
+                 setGameStarted(gameState.gameStarted)
+               }
+               
+               // ALWAYS PAUSE TIMERS when loading saved game for safety
+               // This allows user to review state before resuming
+               setIsRunning(false)
+               
+               // Store the original running state so user knows what it was
+               const wasRunning = gameState.isRunning || false
+               
+               if (gameState.numPlayers !== undefined) {
+                 setNumPlayers(gameState.numPlayers)
+               }
+               
+               if (gameState.levels) {
+                 setLevels(gameState.levels)
+               }
+               
+               if (gameState.maxRebuys !== undefined) {
+                 setMaxRebuys(gameState.maxRebuys)
+             }
+               
+               if (gameState.buyInPrice !== undefined) {
+                 setBuyInPrice(gameState.buyInPrice)
+               }
+               
+               if (gameState.rebuyPrice !== undefined) {
+                 setRebuyPrice(gameState.rebuyPrice)
+               }
+
+                                if (gameState.lowestChipValue !== undefined) {
+                   setLowestChipValue(gameState.lowestChipValue)
+                 }
+
+                 if (gameState.desiredNumberOfLevels !== undefined) {
+                   setDesiredNumberOfLevels(gameState.desiredNumberOfLevels)
+                 }
+                 
+                 if (gameState.userDefaultLevels !== undefined) {
+                   setUserDefaultLevels(gameState.userDefaultLevels)
+                 }
+               
+             } catch (error) {
+                                console.error('Error restoring game state:', error)
+             }
             }
           }
           
                    // App access functions
          function handleAppUnlock() {
            if (appPassword === '1234') {
+             if (selectedAction === 'new') {
+               // For new game, clear saved state and start fresh
+               localStorage.removeItem('pokerTournamentState')
+             } else if (selectedAction === 'load') {
+               // For loading saved game, restore the saved state
+               restoreSavedGameState()
+             }
+             
+             // Unlock the app
              setIsAppUnlocked(true)
              setShowAppLogin(false)
              setAppPassword('')
+             setSelectedAction(null)
            } else {
-             alert('Incorrect password!')
+             alert(t.incorrectPassword)
              setAppPassword('')
            }
          }
@@ -546,7 +1433,7 @@
              setShowAdminLogin(false)
              setAdminPassword('')
            } else {
-             alert('Incorrect password!')
+             alert(t.incorrectPassword)
              setAdminPassword('')
            }
          }
@@ -558,14 +1445,75 @@
            setRequestedAdminMode(null)
          }
          
+         // Function to manually reset addon break state
+         function resetAddonBreak() {
+           setAddonBreakTriggered(false)
+           setAddonBreakPending(false)
+           console.log('🔄 Addon break state reset')
+         }
+         
          function addBlindLevel() {
            const newLevel = levels.length + 1
            const lastLevel = levels[levels.length - 1]
-           setLevels([...levels, {
-             level: newLevel,
-             smallBlind: lastLevel.smallBlind * 2,
-             bigBlind: lastLevel.bigBlind * 2
-           }])
+           const smallBlind = lastLevel ? lastLevel.smallBlind * 2 : lowestChipValue
+           const bigBlind = lastLevel ? lastLevel.bigBlind * 2 : lowestChipValue * 2
+           
+           setLevels([...levels, { level: newLevel, smallBlind, bigBlind }])
+         }
+
+         function generateBlindLevels() {
+           if (lowestChipValue <= 0) {
+             alert(t.chipValueMustBeGreaterThanZero)
+             return
+           }
+
+           if (desiredNumberOfLevels <= 0) {
+             alert(t.numberOfLevelsMustBeGreaterThanZero)
+             return
+           }
+
+           const newLevels = []
+           let smallBlind = lowestChipValue
+           let bigBlind = lowestChipValue * 2
+
+           // Generate desired number of levels with progressive doubling
+           for (let i = 1; i <= desiredNumberOfLevels; i++) {
+             newLevels.push({
+               level: i,
+               smallBlind: smallBlind,
+               bigBlind: bigBlind
+             })
+             
+             // Double the blinds for next level
+             smallBlind *= 2
+             bigBlind *= 2
+           }
+
+           setLevels(newLevels)
+         }
+
+         function updateBlindLevelsForNewChipValue() {
+           if (levels.length === 0) return
+           
+           const newLevels = []
+           let smallBlind = lowestChipValue
+           let bigBlind = lowestChipValue * 2
+
+           // Update existing levels with new progression, maintaining current count
+           const currentLevelCount = levels.length
+           for (let i = 0; i < currentLevelCount; i++) {
+             newLevels.push({
+               level: i + 1,
+               smallBlind: smallBlind,
+               bigBlind: bigBlind
+             })
+             
+             // Double the blinds for next level
+             smallBlind *= 2
+             bigBlind *= 2
+           }
+
+           setLevels(newLevels)
          }
          
          function removeBlindLevel() {
@@ -575,16 +1523,71 @@
          }
          
          function resetToDefaults() {
-           setLevels([
-             { level: 1, smallBlind: 25, bigBlind: 50 },
-             { level: 2, smallBlind: 50, bigBlind: 100 },
-             { level: 3, smallBlind: 75, bigBlind: 150 },
-             { level: 4, smallBlind: 100, bigBlind: 200 },
-             { level: 5, smallBlind: 150, bigBlind: 300 },
-             { level: 6, smallBlind: 200, bigBlind: 400 }
-           ])
+           // Clear any old localStorage data that might have old defaults
+           localStorage.removeItem('pokerTournamentState')
+           
+           // Reset to default values
+           setLowestChipValue(25)
+           setDesiredNumberOfLevels(12)
+           
+           // Generate default levels based on new defaults
+           const defaultLevels = []
+           let smallBlind = 25
+           let bigBlind = 50
+
+           for (let i = 1; i <= 12; i++) {
+             defaultLevels.push({
+               level: i,
+               smallBlind: smallBlind,
+               bigBlind: bigBlind
+             })
+             
+             // Double the blinds for next level
+             smallBlind *= 2
+             bigBlind *= 2
+           }
+
+           setLevels(defaultLevels)
            setTimeFormat('minutes')
            setTimePerLevelMMSS('10:00')
+         }
+         
+         // User default blind level functions
+         function saveUserDefaultLevels() {
+           const userDefaults = {
+             levels: [...levels],
+             lowestChipValue,
+             desiredNumberOfLevels,
+             savedAt: Date.now()
+           }
+           
+           localStorage.setItem('userDefaultBlindLevels', JSON.stringify(userDefaults))
+           setUserDefaultLevels(userDefaults)
+           
+           // Show success message
+           alert(t.blindLevelListSavedAsPersonalDefault)
+         }
+         
+         function restoreUserDefaultLevels() {
+           if (userDefaultLevels) {
+             setLevels([...userDefaultLevels.levels])
+             setLowestChipValue(userDefaultLevels.lowestChipValue)
+             setDesiredNumberOfLevels(userDefaultLevels.desiredNumberOfLevels)
+             
+                        // Show success message
+           alert(t.personalBlindLevelListRestored)
+                        } else {
+               // Show error message
+               alert(t.noPersonalDefaultsFound)
+             }
+         }
+         
+         function clearUserDefaultLevels() {
+           localStorage.removeItem('userDefaultBlindLevels')
+           setUserDefaultLevels(null)
+           
+           // Show success message
+           alert(t.personalDefaultsCleared)
          }
          
          // Prize calculator functions
@@ -613,8 +1616,25 @@
            if (match) {
              const [, type, id] = match
              setCurrentTrack({ type, id, url: spotifyUrl })
+             
+             // Sync game state to Firebase
+             syncGameState({
+               isRunning,
+               gameStarted,
+               players,
+               eliminatedIds,
+               rebuyCounts,
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack: { type, id, url: spotifyUrl }
+             })
            } else {
-             alert('Please enter a valid Spotify URL')
+             alert(t.pleaseEnterValidSpotifyUrl)
            }
          }
          
@@ -627,13 +1647,34 @@
            return null
          }
          
+         // Calculate total prize pool automatically
+         const totalPrizePool = useMemo(() => {
+           const buyInTotal = buyInPrice * numPlayers
+           const rebuyTotal = Object.values(rebuyCounts).reduce((sum, count) => sum + (count * rebuyPrice), 0)
+           return buyInTotal + rebuyTotal
+         }, [buyInPrice, rebuyPrice, numPlayers, rebuyCounts])
+         
          const prizeDistribution = useMemo(() => {
             const ratio = parseRatio(ratioInput, numWinners)
            const total = ratio.reduce((sum, r) => sum + r, 0)
-           return ratio.map(r => Math.round((r / total) * prizePool))
-          }, [ratioInput, prizePool, numWinners])
+           return ratio.map(r => Math.round((r / total) * totalPrizePool))
+          }, [ratioInput, totalPrizePool, numWinners])
          
                    // Seat positions are now calculated directly in the JSX for simplicity
+        
+                 // Auto-update blind levels when lowest chip value changes
+         // useEffect(() => {
+         //   if (levels.length > 0 && lowestChipValue > 0) {
+         //     updateBlindLevelsForNewChipValue()
+         //   }
+         // }, [lowestChipValue])
+
+         // Auto-update blind levels when desired number of levels changes
+         // useEffect(() => {
+         //   if (levels.length > 0 && desiredNumberOfLevels > 0 && levels.length !== desiredNumberOfLevels) {
+         //     generateBlindLevels()
+         //   }
+         // }, [desiredNumberOfLevels])
         
                  // Timer effects
          useEffect(() => {
@@ -641,24 +1682,98 @@
            
            intervalRef.current = setInterval(() => {
              setRemainingSeconds(prev => {
-               if (prev <= 1) {
-                 // Level up
+               const newRemainingSeconds = (() => {
+                 if (prev <= 1) {
+                   // Check if addon break is pending before level progression
+                   if (addonBreakPending && !isOnBreak && gameStarted) {
+                     console.log('🏁 Level ended, starting addon break...')
+                     console.log('📊 Debug - addonBreakPending:', addonBreakPending, 'isOnBreak:', isOnBreak, 'gameStarted:', gameStarted)
+                     
+                     // Start 15-minute break immediately
+                     startBreak(15)
+                     setAddonBreakPending(false)
+                     
+                     // Show notification that break is starting now (only if not in game)
+                     if (!isRunning && !isOnBreak) {
+                       alert(t.addonBreakStartingNow)
+                     }
+                     
+                     // Don't progress level yet - wait for break to end
+                     return 0
+                   } else {
+                     console.log('🔍 Debug - Level ending check:', {
+                       addonBreakPending,
+                       isOnBreak,
+                       gameStarted,
+                       remainingSeconds: prev
+                     })
+                   }
+                   
+                                    // Level up (only if no addon break is pending)
                  if (currentLevelIndex < levels.length - 1) {
-                   setCurrentLevelIndex(prev => prev + 1)
+                   setCurrentLevelIndex(prev => {
+                     const newLevelIndex = prev + 1
+                     
+                     // Sync game state to Firebase when level changes
+                     setTimeout(() => {
+                       syncGameState({
+                         isRunning,
+                         gameStarted,
+                         players,
+                         eliminatedIds,
+                         rebuyCounts,
+                         currentLevelIndex: newLevelIndex,
+                         remainingSeconds: getTimePerLevelInSeconds(),
+                         breakSeconds,
+                         isOnBreak,
+                         addonBreakTriggered,
+                         addonBreakPending,
+                         spotifyUrl,
+                         currentTrack
+                       })
+                     }, 100)
+                     
+                     return newLevelIndex
+                   })
                    playChime()
                    return getTimePerLevelInSeconds()
                  } else {
-                   setIsRunning(false)
-                   playChime()
-                   return 0
+                     // Reached last level - show infinity but keep counting total time
+                     // Only play chime once when reaching the last level, not continuously
+                     if (prev > 0) {
+                     playChime()
+                     }
+                     return 0
+                   }
                  }
+                 return prev - 1
+               })()
+               
+               // Sync game state to Firebase every 10 seconds to avoid too many updates
+               if (newRemainingSeconds % 10 === 0) {
+                 syncGameState({
+                   isRunning,
+                   gameStarted,
+                   players,
+                   eliminatedIds,
+                   rebuyCounts,
+                   currentLevelIndex,
+                   remainingSeconds: newRemainingSeconds,
+                   breakSeconds,
+                   isOnBreak,
+                   addonBreakTriggered,
+                   addonBreakPending,
+                   spotifyUrl,
+                   currentTrack
+                 })
                }
-               return prev - 1
+               
+               return newRemainingSeconds
              })
            }, 1000)
            
            return () => clearInterval(intervalRef.current)
-         }, [isRunning, currentLevelIndex, levels.length, timeFormat, minutesPerLevel, timePerLevelMMSS])
+         }, [isRunning, currentLevelIndex, levels.length, timeFormat, minutesPerLevel, timePerLevelMMSS, addonBreakPending, isOnBreak, gameStarted, lang])
          
          // Break timer effect
          useEffect(() => {
@@ -666,19 +1781,40 @@
            
            breakIntervalRef.current = setInterval(() => {
              setBreakSeconds(prev => {
-               if (prev <= 1) {
+               const newBreakSeconds = prev <= 1 ? 0 : prev - 1
+               
+               // Sync game state to Firebase when break ends
+               if (newBreakSeconds === 0 && prev > 0) {
                  setIsOnBreak(false)
                  playChime()
-                 return 0
+                 
+                 setTimeout(() => {
+                   syncGameState({
+                     isRunning,
+                     gameStarted,
+                     players,
+                     eliminatedIds,
+                     rebuyCounts,
+                     currentLevelIndex,
+                     remainingSeconds,
+                     breakSeconds: 0,
+                     isOnBreak: false,
+                     addonBreakTriggered,
+                     addonBreakPending,
+                     spotifyUrl,
+                     currentTrack
+                   })
+                 }, 100)
                }
-               return prev - 1
+               
+               return newBreakSeconds
              })
            }, 1000)
            
            return () => clearInterval(breakIntervalRef.current)
           }, [isOnBreak, breakSeconds, soundEnabled])
          
-                   // Elapsed time effect - only count game time, not break time
+                   // Elapsed time effect - count game time, continue even after last level
          useEffect(() => {
             if (!isRunning) return
            
@@ -689,36 +1825,60 @@
            return () => clearInterval(elapsedIntervalRef.current)
           }, [isRunning])
          
-         // Auto-break effect
+         // Addon break system - triggers 15-minute break when addon time is reached
          useEffect(() => {
-           if (autoBreakMinutes <= 0 || !isRunning) return
+           if (!addonTime || !gameStarted) return // Only work when game is started
            
            const checkInterval = setInterval(() => {
-             if (elapsedSeconds > 0 && elapsedSeconds % (autoBreakMinutes * 60) === 0) {
-               startBreak(5) // 5 minute break
+             const now = new Date()
+             const currentHour = now.getHours()
+             const currentMinute = now.getMinutes()
+             const [targetHour, targetMinute] = addonTime.split(':').map(Number)
+             
+             if (currentHour === targetHour && currentMinute === targetMinute && !addonBreakTriggered) {
+               console.log('🕐 Addon time reached! Marking break as pending...')
+               console.log('📊 Debug - Setting addonBreakPending to true, addonBreakTriggered to true')
+               
+               // Addon time reached - mark as pending break (don't start immediately)
+               setAddonBreakPending(true)
+               setAddonBreakTriggered(true) // Prevent multiple triggers
+               playChime() // Play sound to notify
+               
+               // Sync game state to Firebase
+               setTimeout(() => {
+                 syncGameState({
+                   isRunning,
+                   gameStarted,
+                   players,
+                   eliminatedIds,
+                   rebuyCounts,
+                   currentLevelIndex,
+                   remainingSeconds,
+                   breakSeconds,
+                   isOnBreak,
+                   addonBreakTriggered: true,
+                   addonBreakPending: true,
+                   spotifyUrl,
+                   currentTrack
+                 })
+               }, 100)
+               
+               // Force a re-render to ensure state is updated
+               setTimeout(() => {
+                 console.log('🔄 State update check - addonBreakPending should be true:', addonBreakPending)
+               }, 100)
+               
+                                  // Show notification that break will start at end of current level (only if not in game)
+                   if (!isRunning && !isOnBreak) {
+                     alert(t.addonTimeReached)
+                   }
              }
            }, 1000)
            
            return () => clearInterval(checkInterval)
-          }, [autoBreakMinutes, elapsedSeconds, isRunning, soundEnabled])
-         
-                               // Addon timer effect - always runs regardless of tournament state
-         useEffect(() => {
-            if (!addonTime) return
-            
-            const checkInterval = setInterval(() => {
-              const now = new Date()
-              const currentHour = now.getHours()
-              const currentMinute = now.getMinutes()
-              const [targetHour, targetMinute] = addonTime.split(':').map(Number)
-              
-              if (currentHour === targetHour && currentMinute === targetMinute) {
-                playChime() // Play Airport sound when addon time is reached
-              }
-            }, 1000)
-            
-            return () => clearInterval(checkInterval)
-          }, [addonTime, soundEnabled])
+          }, [addonTime, lang, addonBreakTriggered, gameStarted])
+          
+
           
           // Addon timer display update effect - updates every second for smooth countdown
           useEffect(() => {
@@ -734,8 +1894,18 @@
          
                    // Save game state to localStorage whenever important state changes
           useEffect(() => {
+            // Don't auto-save when on the start screen (app not unlocked)
+            if (!isAppUnlocked) {
+              console.log('🔍 Auto-save skipped - app not unlocked')
+              return
+            }
+            
+            console.log('🔍 Auto-save effect running with numPlayers:', numPlayers)
+            console.log('🔍 Current localStorage before auto-save:', localStorage.getItem('pokerTournamentState'))
+            
             const gameState = {
               isRunning,
+              gameStarted,
               currentLevelIndex,
               remainingSeconds,
               minutesPerLevel,
@@ -744,6 +1914,8 @@
               elapsedSeconds,
               breakSeconds,
               isOnBreak,
+              addonBreakTriggered,
+              addonBreakPending,
               autoBreakMinutes,
               numPlayers,
               players,
@@ -755,15 +1927,23 @@
               numWinners,
               prizePool,
               ratioInput,
+              buyInPrice,
+              rebuyPrice,
+              currency,
+           lowestChipValue,
+           desiredNumberOfLevels,
+           userDefaultLevels,
               spotifyUrl,
-              currentTrack
+              currentTrack,
+              savedAt: Date.now() // Add timestamp for tracking
             }
+            
             localStorage.setItem('pokerTournamentState', JSON.stringify(gameState))
           }, [
-            isRunning, currentLevelIndex, remainingSeconds, minutesPerLevel,
-            timeFormat, timePerLevelMMSS, elapsedSeconds, breakSeconds, isOnBreak, autoBreakMinutes,
+            isAppUnlocked, isRunning, gameStarted, currentLevelIndex, remainingSeconds, minutesPerLevel,
+            timeFormat, timePerLevelMMSS, elapsedSeconds, breakSeconds, isOnBreak, addonBreakTriggered, addonBreakPending, autoBreakMinutes,
             numPlayers, players, eliminatedIds, rebuyCounts, levels,
-            maxRebuys, addonTime, numWinners, prizePool, ratioInput, spotifyUrl, currentTrack
+            maxRebuys, addonTime, numWinners, prizePool, ratioInput, buyInPrice, rebuyPrice, currency, lowestChipValue, desiredNumberOfLevels, userDefaultLevels, spotifyUrl, currentTrack
           ])
           
           // Player count effect - handle dynamic player count changes
@@ -798,9 +1978,8 @@
                 }
                 return prevPlayers
               })
-              // Reset rebuy counts and eliminated status when player count changes
-              setRebuyCounts({})
-              setEliminatedIds([])
+              // DON'T reset rebuy counts and eliminated status when player count changes
+              // This preserves the saved state
             }
          }, [numPlayers, t.playerPlaceholder])
          
@@ -809,11 +1988,15 @@
            document.documentElement.lang = lang
            document.documentElement.dir = lang === 'he' ? 'rtl' : 'ltr'
             
-            // Update player names when language changes
+            // Only update player names when language changes if no saved game exists
+            // This prevents overwriting saved player names
+            const savedState = localStorage.getItem('pokerTournamentState')
+            if (!savedState) {
             setPlayers(prev => prev.map((player, idx) => ({
               ...player,
               name: t.playerPlaceholder(idx + 1)
             })))
+            }
           }, [lang, t.playerPlaceholder])
           
           // Fullscreen change effect
@@ -853,9 +2036,9 @@
              // Calculate total minutes until target time
              let totalMinutesUntilAddon = (targetHour * 60 + targetMinute) - (currentHour * 60 + currentMinute)
              
-             // If we've passed the time today, target tomorrow
+             // If we've passed the time today, don't add 24 hours - just show 00:00
              if (totalMinutesUntilAddon <= 0) {
-               totalMinutesUntilAddon += 24 * 60 // Add 24 hours
+               return '00:00'
              }
              
              const totalSecondsUntilAddon = (totalMinutesUntilAddon * 60) - currentSecond
@@ -875,6 +2058,47 @@
         
         return (
           <div className="max-w-7xl mx-auto p-6">
+            {/* Room Info Header */}
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-4">
+                  <div className="bg-green-600 px-3 py-2 rounded-lg text-sm">
+                    <span data-room-id>Room: {roomId}</span>
+                  </div>
+                  <div id="connectionStatus" className="bg-green-600 px-3 py-2 rounded-lg text-sm">
+                    <span>Connected</span>
+                  </div>
+                </div>
+                <div className="text-slate-400 text-sm">
+                  {lang === 'he' ? 'שתף קוד חדר זה עם שחקנים אחרים כדי להצטרף לאותו משחק' : 'Share this room code with other players to join the same game'}
+                </div>
+              </div>
+              
+              {/* Room Join Section */}
+              <div className="mt-4 pt-4 border-t border-slate-700">
+                <div className="flex items-center space-x-4">
+                  <div className="text-slate-300 text-sm">{t.joinDifferentRoom}</div>
+                  <input
+                    type="text"
+                    placeholder={t.enterRoomCode}
+                    className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={joinRoomCode}
+                    onChange={(e) => setJoinRoomCode(e.target.value.toUpperCase())}
+                    maxLength={6}
+                  />
+                  <button
+                    onClick={joinRoom}
+                    className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-white transition-colors"
+                  >
+                    {t.joinRoom}
+                  </button>
+                </div>
+                <div className="text-slate-400 text-xs mt-2">
+                  {t.roomCodeHelper}
+                </div>
+              </div>
+            </div>
+            
              {/* App Password Modal */}
              {showAppLogin && (
                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -922,48 +2146,64 @@
                              })()
                    }`}
                    onClick={() => {
+                             console.log('🔍 Open Recent Game clicked')
+                             
+                             // Read the saved state ONCE and store it
                              const savedState = localStorage.getItem('pokerTournamentState')
+                             console.log('🔍 Raw saved state from localStorage:', savedState)
+                             
                              if (savedState) {
-                               // Show info about the saved game
                                try {
                                  const gameState = JSON.parse(savedState)
+                                 console.log('🔍 Parsed game state:', gameState)
+                                 console.log('🔍 Players:', gameState.players?.length || 0)
+                                 console.log('🔍 Level:', gameState.currentLevelIndex + 1 || 1)
+                                 
+                                 // Set action to load saved game and show password input
+                                 setSelectedAction('load')
+                                 console.log('🔍 Action set to: load - password input should now be visible')
+                                 
+                                 // Show info about the saved game (but don't block with alert)
                                  const savedDate = new Date(gameState.savedAt || Date.now())
                                  const dateStr = savedDate.toLocaleDateString(lang === 'he' ? 'he-IL' : 'en-US')
                                  const timeStr = savedDate.toLocaleTimeString(lang === 'he' ? 'he-IL' : 'en-US', { 
                                    hour: '2-digit', 
                                    minute: '2-digit' 
                                  })
-                                 alert(lang === 'he' 
-                                   ? `משחק שמור נמצא מ-${dateStr} ${timeStr}\n${gameState.numPlayers || 0} שחקנים, רמה ${gameState.currentLevelIndex + 1 || 1}\nהכנס סיסמה כדי להמשיך`
-                                   : `Saved game found from ${dateStr} ${timeStr}\n${gameState.numPlayers || 0} players, level ${gameState.currentLevelIndex + 1 || 1}\nEnter password to continue`
-                                 )
+                                 
+                                 console.log('🔍 Ready to load:', `${gameState.numPlayers || 0} players, level ${gameState.currentLevelIndex + 1 || 1}`)
+                                 
                                } catch (e) {
-                                 alert(lang === 'he' ? 'שגיאה בקריאת המשחק השמור' : 'Error reading saved game')
+                                 console.error('❌ Error parsing saved state:', e)
+                                 alert(t.errorReadingSavedGame)
                                }
                      } else {
-                               alert(lang === 'he' ? 'לא נמצא משחק שמור' : 'No saved game found')
+                               console.log('❌ No saved state found')
+                               alert(t.noSavedGame)
                              }
                            }}
                            disabled={!localStorage.getItem('pokerTournamentState')}
                          >
-                           💾 {lang === 'he' ? 'פתח משחק אחרון' : 'Open Recent Game'}
+                           💾 {t.openRecentGame}
                          </button>
                          
                          {/* Start New Game Button */}
                          <button
                            className="px-4 py-3 rounded-lg border-2 font-medium transition-all bg-blue-600 border-blue-500 text-white hover:bg-blue-500"
                            onClick={() => {
-                             // Clear saved game and show message
+                             if (confirm(t.confirmNewGame)) {
+                               // Set action to start new game
+                               setSelectedAction('new')
+                               // Clear saved game state completely
                              localStorage.removeItem('pokerTournamentState')
-                             setAppPassword('')
-                             alert(lang === 'he' 
-                               ? 'משחק שמור נמחק! הכנס סיסמה כדי להתחיל משחק חדש'
-                               : 'Saved game cleared! Enter password to start new game'
-                             )
-                             console.log('🎮 Saved game cleared, ready for new game')
+                               
+                               // Show success message
+                                                            alert(t.newGameReady)
+  
+                             }
                            }}
                          >
-                           🎮 {lang === 'he' ? 'משחק חדש' : 'New Game'}
+                           🃏 {t.newGame}
                          </button>
                        </div>
                        
@@ -987,6 +2227,7 @@
                                  <div className="text-slate-300 text-xs">
                                    {gameState.numPlayers || 0} {t.savedGameDetails} {gameState.currentLevelIndex + 1 || 1}
                                  </div>
+
                                </div>
                              )
                            } catch (e) {
@@ -1006,9 +2247,17 @@
                        })()}
                      </div>
                      
+                     {/* Password Section - Only show when action is selected */}
+                     {selectedAction && (
                      <div className="space-y-4">
+
                        <div>
-                         <label className="text-slate-300 text-sm block mb-2">{t.enterPassword}:</label>
+                           <label className="text-slate-300 text-sm block mb-2">
+                             {selectedAction === 'new' 
+                               ? t.enterPasswordForNewGame
+                               : t.enterPasswordForSavedGame
+                             }
+                           </label>
                        <input
                          className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                          type="password"
@@ -1030,7 +2279,7 @@
                        <button
                          className="px-6 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
                          onClick={() => {
-                           setShowAppLogin(false)
+                               setSelectedAction(null)
                            setAppPassword('')
                          }}
                        >
@@ -1038,6 +2287,7 @@
                        </button>
                      </div>
                    </div>
+                     )}
                  </div>
                </div>
              )}
@@ -1062,6 +2312,10 @@
                      <div className="text-blue-200">{t.tournamentTabDesc1}</div>
                      <div className="text-blue-200">{t.tournamentTabDesc2}</div>
                      <div className="text-blue-200">{t.tournamentTabDesc3}</div>
+                     <div className="text-blue-200">• {lang === 'he' 
+                       ? 'השתמש בכפתור "התחל משחק" כדי לנעול הגדרות הטורניר'
+                       : 'Use "Start Game" button to lock tournament settings'
+                     }</div>
                    </div>
                    <div>
                      <div className="font-medium mb-1">💰 {t.prizeCalculator}:</div>
@@ -1092,13 +2346,13 @@
                     className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors"
                     onClick={newGame}
                   >
-                    🎮 New Game
+                    🃏 {t.newGame}
                   </button>
                   <button
                     className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
                     onClick={toggleFullscreen}
                   >
-                    {isFullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen'}
+                    {isFullscreen ? `⛶ ${t.exitFullscreen}` : `⛶ ${t.fullscreen}`}
                  </button>
                  <button
                    className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
@@ -1113,16 +2367,16 @@
              {showAdminLogin && (
                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                  <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-96">
-                   <h3 className="text-xl font-semibold text-slate-100 mb-4 text-center">🔐 {lang === 'he' ? 'גישת מנהל' : 'Admin Access'}</h3>
+                   <h3 className="text-xl font-semibold text-slate-100 mb-4 text-center">🔐 {t.adminAccess}</h3>
                    <div className="space-y-4">
                      <div>
-                       <label className="text-slate-300 text-sm block mb-2">Password:</label>
+                       <label className="text-slate-300 text-sm block mb-2">{t.password}</label>
                        <input
                          className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                          type="password"
                          value={adminPassword}
                          onChange={(e) => setAdminPassword(e.target.value)}
-                         placeholder={lang === 'he' ? 'הכנס סיסמה' : 'Enter password'}
+                         placeholder={t.enterPasswordPlaceholder}
                          onKeyPress={(e) => e.key === 'Enter' && handleAdminAccess()}
                        />
                      </div>
@@ -1131,7 +2385,7 @@
                          className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
                          onClick={handleAdminAccess}
                        >
-                         Login
+                         {t.login}
                        </button>
                        <button
                          className="flex-1 px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
@@ -1141,7 +2395,7 @@
                            setRequestedAdminMode(null)
                          }}
                        >
-                         Cancel
+                         {t.cancel}
                        </button>
                      </div>
                    </div>
@@ -1202,20 +2456,33 @@
                    <div className="flex items-center gap-3">
                      <label className="text-slate-300">{t.playersCount}</label>
                      <select
-                       className="bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                       className={`border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                         gameStarted 
+                           ? 'bg-slate-700/40 border-slate-600 text-slate-400 cursor-not-allowed' 
+                           : 'bg-slate-900/60 border-slate-700 text-slate-100'
+                       }`}
                        value={numPlayers}
-                       onChange={(e) => setNumPlayers(Number(e.target.value))}
+                       onChange={(e) => updateNumPlayers(Number(e.target.value))}
+                       disabled={gameStarted}
                      >
                        {[2,3,4,5,6,7,8,9].map(n => (
                          <option key={n} value={n}>{n}</option>
                        ))}
                      </select>
+                     {gameStarted && (
+                       <span className="text-xs text-slate-400">🔒 Locked</span>
+                     )}
                    </div>
                    <button 
-                     className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors" 
+                     className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                       gameStarted 
+                         ? 'bg-slate-500 text-slate-400 cursor-not-allowed' 
+                         : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                     }`}
                      onClick={seatRandom}
+                     disabled={gameStarted}
                    >
-                     {t.randomSeating}
+                     {gameStarted ? `🔒 ${t.seatingLocked}` : t.randomSeating}
                    </button>
                  </div>
 
@@ -1266,11 +2533,11 @@
                             <div className="text-center">
                               <div className="text-xs font-bold">{player.name}</div>
                               <div className="text-xs opacity-75">
-                                {rebuyCounts[player.id] || 0} rebuys
+                                {rebuyCounts[player.id] || 0} {t.rebuys}
                               </div>
                               {maxRebuys > 0 && (rebuyCounts[player.id] || 0) >= maxRebuys && (
                                 <div className="text-xs text-amber-400 font-bold mt-1">
-                                  Max Reached
+                                  {t.maxReached}
                                 </div>
                               )}
                             </div>
@@ -1280,6 +2547,13 @@
                   </div>
 
                  {/* Player Grid */}
+                 {!gameStarted && (
+                   <div className="mb-3 p-2 bg-amber-900/30 border border-amber-600/50 rounded-lg">
+                     <div className="text-amber-200 text-xs text-center">
+                       🔒 {t.playerControlsLocked}
+                     </div>
+                   </div>
+                 )}
                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                    {players.map((player, idx) => (
                      <div key={player.id} className="bg-slate-900/40 rounded-lg border border-slate-600 p-3">
@@ -1288,53 +2562,71 @@
                          <span className="text-slate-300 text-sm font-medium">{t.seat} {idx + 1}</span>
                          <button
                            className={`px-3 py-1 text-xs rounded-md border font-medium ${
-                             eliminatedIds.includes(player.id) 
+                             gameStarted
+                               ? (eliminatedIds.includes(player.id) 
                                ? 'bg-rose-700/60 border-rose-600 text-rose-100' 
-                               : 'bg-emerald-700/40 border-emerald-600 text-emerald-100'
+                                   : 'bg-emerald-700/40 border-emerald-600 text-emerald-100')
+                               : 'bg-slate-500 border-slate-400 text-slate-300 cursor-not-allowed'
                            }`}
                            onClick={() => toggleEliminated(player.id)}
+                           disabled={!gameStarted}
                          >
-                           {eliminatedIds.includes(player.id) ? 'Out' : 'In'}
+                           {gameStarted 
+                             ? (eliminatedIds.includes(player.id) ? t.out : t.in)
+                             : `🔒 ${t.locked}`
+                           }
                          </button>
                        </div>
                        
                        {/* Player Name */}
                        <input
-                         className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm mb-2"
+                         className={`w-full border rounded-lg px-3 py-2 text-sm mb-2 ${
+                           gameStarted 
+                             ? 'bg-slate-700/40 border-slate-600 text-slate-400 cursor-not-allowed' 
+                             : 'bg-slate-900/60 border-slate-700 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                         }`}
                          type="text"
                          value={player.name}
                          onChange={(e) => updatePlayerName(idx, e.target.value)}
                          placeholder={t.playerPlaceholder(idx + 1)}
+                         disabled={gameStarted}
                        />
                        
                        {/* Rebuy Controls */}
                        <div className="flex items-center justify-between">
-                           <span className="text-slate-300 text-xs">Rebuys:</span>
+                           <span className="text-slate-300 text-xs">{t.rebuys}:</span>
                          <div className="flex items-center gap-2">
                            <button
-                             className="px-2 py-1 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60"
+                             className={`px-2 py-1 text-xs rounded-md border ${
+                               gameStarted
+                                 ? 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                                 : 'bg-slate-500 border-slate-400 text-slate-300 cursor-not-allowed'
+                             }`}
                              onClick={() => removeRebuy(player.id)}
+                             disabled={!gameStarted}
                            >
-                             -
+                             {gameStarted ? '-' : '🔒'}
                            </button>
                            <span className="text-slate-300 text-sm font-mono min-w-[2rem] text-center">
                              {rebuyCounts[player.id] || 0}
                            </span>
                            <button
                                className={`px-2 py-1 text-xs rounded-md border font-medium ${
-                                 (rebuyCounts[player.id] || 0) >= maxRebuys
+                                 gameStarted
+                                   ? ((rebuyCounts[player.id] || 0) >= maxRebuys
                                    ? 'bg-slate-500 text-slate-400 cursor-not-allowed'
-                                   : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                                       : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60')
+                                   : 'bg-slate-500 border-slate-400 text-slate-300 cursor-not-allowed'
                                }`}
                              onClick={() => addRebuy(player.id)}
-                               disabled={(rebuyCounts[player.id] || 0) >= maxRebuys}
+                               disabled={!gameStarted || (rebuyCounts[player.id] || 0) >= maxRebuys}
                            >
-                             +
+                             {gameStarted ? '+' : '🔒'}
                            </button>
                          </div>
                            {maxRebuys > 0 && (
                              <span className="text-xs text-slate-500">
-                               Max: {maxRebuys}
+                               {t.maxReached}: {maxRebuys}
                              </span>
                            )}
                        </div>
@@ -1443,7 +2735,7 @@
                           }
                         }}
                       >
-                        ✅ {lang === 'he' ? 'החל הגדרות' : 'Apply Settings'}
+                        ✅ {t.applySettings}
                       </button>
                     </div>
                     
@@ -1465,7 +2757,7 @@
                  <div className="bg-gradient-to-br from-indigo-600/20 to-fuchsia-600/10 border border-slate-700 rounded-xl p-6 mb-4">
                    <div className="text-center mb-4">
                      <div className="text-sm text-slate-300 mb-1">{t.currentLevel}</div>
-                     <div className="text-4xl font-bold text-slate-100">Level {currentLevel.level}</div>
+                     <div className="text-4xl font-bold text-slate-100">{t.level} {currentLevel.level}</div>
                    </div>
                    
                    <div className="grid grid-cols-2 gap-4 mb-4">
@@ -1497,10 +2789,67 @@
                    )}
                  </div>
 
+                 {/* Start Game Button */}
+                 {!gameStarted && (
+                   <div className="text-center mb-6">
+                     <div className="text-sm text-slate-300 mb-3">{t.readyToStart}</div>
+                     <button 
+                       className={`px-8 py-4 rounded-xl font-bold text-lg transition-all transform ${
+                         isAddonTimeValid() 
+                           ? 'hover:scale-105 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white shadow-lg' 
+                           : 'bg-slate-500 text-slate-300 cursor-not-allowed'
+                       }`}
+                       onClick={startGame}
+                       disabled={!isAddonTimeValid()}
+                     >
+                       🚀 {t.startGame}
+                     </button>
+                     <div className="text-xs text-slate-400 mt-2">
+                       {t.startGameLocked}
+                     </div>
+                     {!isAddonTimeValid() && (
+                       <div className="text-xs text-red-400 mt-2">
+                         {t.cannotStartWithPastAddon}
+                       </div>
+                     )}
+                   </div>
+                 )}
+                 
+                 {/* Game Started Indicator */}
+                 {gameStarted && (
+                   <div className="text-center mb-6">
+                     <div className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600/20 border border-emerald-500/30 rounded-full">
+                       <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+                       <span className="text-emerald-300 font-medium">{t.tournamentStarted}</span>
+                     </div>
+                   </div>
+                 )}
+                 
                  {/* Timer */}
                  <div className="text-center mb-4">
                    <div className="text-sm text-slate-300 mb-2">{t.timer}</div>
-                   <div className="text-6xl font-mono text-slate-100 mb-4">{formatTime(remainingSeconds)}</div>
+                   <div className="text-6xl font-mono text-slate-100 mb-4">
+                     {currentLevelIndex === levels.length - 1 && remainingSeconds === 0 
+                       ? t.infinite 
+                       : formatTime(remainingSeconds)
+                     }
+                   </div>
+                   
+                   {/* Final Level Indicator */}
+                   {currentLevelIndex === levels.length - 1 && remainingSeconds === 0 && (
+                     <div className="text-lg text-amber-400 font-medium mb-3 animate-pulse">
+                       🏁 {t.finalLevel}
+                     </div>
+                   )}
+                   
+                                                             {/* Addon Break Pending Indicator */}
+                   {addonBreakPending && (
+                     <div className="text-lg text-blue-400 font-medium mb-3 animate-pulse">
+                       ⏳ {t.addonBreakPending}
+                     </div>
+                   )}
+                       
+
                      
                                           {/* Addon Timer Display */}
                       {addonTime && (
@@ -1515,29 +2864,51 @@
                           </div>
                           {formatTimeUntilAddon() === '00:00' && (
                             <div className="text-xs text-red-400 font-bold mt-1 animate-pulse">
-                              ADDON TIME!
+                              {t.addonTime}
                             </div>
                           )}
+                          {addonBreakTriggered && gameStarted && (
+                            <div className="text-xs text-blue-400 font-bold mt-1">
+                              {addonBreakPending 
+                                ? t.addonBreakPending
+                                : t.addonBreakActive
+                              }
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Addon Time Not Set Message */}
+                      {!addonTime && gameStarted && (
+                        <div className="text-center text-slate-400 text-sm mb-4">
+                          {t.noAddonTimeSet}
                         </div>
                       )}
                      
                    <div className="flex gap-3 justify-center">
                      <button 
                           className={`px-6 py-3 rounded-lg font-medium transition-colors ${
-                            isOnBreak 
+                            !gameStarted
                               ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
-                              : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                              : isOnBreak 
+                                ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
                           }`}
                        onClick={handleStartPause}
-                          disabled={isOnBreak}
+                          disabled={!gameStarted || isOnBreak}
                      >
-                       {isRunning ? 'Pause' : 'Start'}
+                       {!gameStarted ? t.startGameFirst : (isRunning ? t.pause : t.resume)}
                      </button>
                      <button 
-                       className="px-6 py-3 rounded-lg font-medium transition-colors bg-slate-700 hover:bg-slate-600 text-slate-100" 
+                       className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+                         !gameStarted 
+                           ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
+                           : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                       }`}
                        onClick={handleReset}
+                       disabled={!gameStarted}
                      >
-                       Reset
+                       {t.reset}
                      </button>
                    </div>
                  </div>
@@ -1551,215 +2922,278 @@
                        <div className="text-3xl font-mono text-slate-100 mb-3">{formatTime(breakSeconds)}</div>
                        <div className="flex gap-2 justify-center mb-3">
                          <button
-                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
+                             !gameStarted
+                               ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
+                               : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                           }`}
                            onClick={() => startBreak(5)}
+                           disabled={!gameStarted}
                          >
                            5m
                          </button>
                          <button
-                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
+                             !gameStarted
+                               ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
+                               : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                           }`}
                            onClick={() => startBreak(10)}
+                           disabled={!gameStarted}
                          >
                            10m
                          </button>
                          <button
-                           className="px-3 py-2 text-xs rounded-md border bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60 w-12 text-center"
+                           className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
+                             !gameStarted
+                               ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
+                               : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
+                           }`}
                            onClick={() => startBreak(15)}
+                           disabled={!gameStarted}
                          >
                            15m
                          </button>
                        </div>
-                         <div className="w-full flex justify-center">
-                       <button
-                             className={`px-4 py-2 text-xs rounded-md border font-medium w-20 text-center ${
-                           isOnBreak && breakSeconds > 0
-                             ? 'bg-amber-600/60 border-amber-600 text-amber-100'
-                             : 'bg-slate-700/60 border-slate-600 text-slate-100'
-                         }`}
-                         onClick={toggleBreakPause}
-                         disabled={breakSeconds === 0}
-                       >
-                         {isOnBreak ? 'Pause' : 'Resume'}
-                       </button>
-                         </div>
+                       <div className="w-full flex justify-center">
+                         <button
+                           className={`px-4 py-2 text-xs rounded-md border font-medium w-20 text-center ${
+                             !gameStarted
+                               ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed'
+                               : isOnBreak && breakSeconds > 0
+                                 ? 'bg-amber-600/60 border-amber-600 text-amber-100'
+                                 : 'bg-slate-700/60 border-slate-600 text-slate-100'
+                           }`}
+                           onClick={toggleBreakPause}
+                           disabled={!gameStarted || breakSeconds === 0}
+                         >
+                           {!gameStarted ? t.startGameFirst : (isOnBreak ? t.pause : t.resume)}
+                         </button>
+                       </div>
+                       
+
                      </div>
                    </div>
 
                    {/* Tournament Info */}
                    <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-600">
                      <div className="text-center">
+                       {/* Game Status Indicator */}
+                       <div className="mb-3">
+                         <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
+                           gameStarted 
+                             ? 'bg-emerald-600/20 border border-emerald-500/30 text-emerald-300' 
+                             : 'bg-slate-600/20 border border-slate-500/30 text-slate-300'
+                         }`}>
+                           <span className={`w-2 h-2 rounded-full ${gameStarted ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'}`}></span>
+                           {gameStarted ? t.tournamentActive : t.tournamentSetup}
+                         </div>
+                       </div>
+                       
                        <div className="text-sm text-slate-300 mb-2">{t.totalTime}</div>
                        <div className="text-2xl font-mono text-slate-100 mb-3">{formatElapsedTime(elapsedSeconds)}</div>
-                         
-                         {/* Tournament Settings Display */}
+                       
+                                                {/* Tournament Settings Display */}
                          <div className="border-t border-slate-600 pt-3 mt-3">
                            <div className="grid grid-cols-2 gap-3 text-xs">
                              <div className="text-slate-400">
-                               <div>Max Rebuys:</div>
+                               <div>{t.maxRebuysLabel}</div>
                                <div className="text-slate-200 font-medium">{maxRebuys}</div>
                              </div>
-                                                          <div className="text-slate-400">
-                                <div>Addon Time:</div>
-                                <div className="text-slate-200 font-medium">{addonTime || 'Off'}</div>
-                              </div>
+                             <div className="text-slate-400">
+                               <div>{t.addonTimeLabel}</div>
+                               <div className="text-slate-200 font-medium">{addonTime || t.off}</div>
+                             </div>
                            </div>
-                         </div>
+                           
+                           {/* Addon Break Status */}
+                           {addonTime && (
+                             <div className="col-span-2 border-t border-slate-600 pt-2 mt-2">
+                               <div className="text-slate-400">
+                                 <div>{t.addonBreakStatus}</div>
+                                 <div className={`font-medium ${
+                                   addonBreakTriggered 
+                                     ? 'text-blue-400' 
+                                     : 'text-slate-200'
+                                 }`}>
+                                   {addonBreakTriggered 
+                                     ? (addonBreakPending 
+                                         ? t.waitingForLevelEnd
+                                         : t.active
+                                       ) 
+                                     : t.waiting
+                                   }
+                                 </div>
+                               </div>
+                             </div>
+                           )}
                          
-                         <div className="text-sm text-slate-400 mb-2 mt-3">{t.automaticBreak}</div>
-                          <div className="flex justify-center">
-                       <input
-                         className="w-16 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                         type="number"
-                         min="0"
-                         value={autoBreakMinutes}
-                         onChange={(e) => setAutoBreakMinutes(Number(e.target.value))}
-                         placeholder="0"
-                       />
-                          </div>
-                       <div className="text-xs text-slate-500 mt-1">
-                         {autoBreakMinutes > 0 ? `= ${autoBreakMinutes}` : t.off}
+                         {/* Pricing Summary */}
+                         <div className="border-t border-slate-600 pt-3 mt-3">
+                           <div className="text-xs text-slate-400 mb-2">{t.tournamentPricing}</div>
+                           <div className="grid grid-cols-2 gap-3 text-xs">
+                                                            <div className="text-slate-400">
+                                 <div>{t.buyInLabel}</div>
+                                 <div className="text-slate-200 font-medium">{getCurrencySymbol()}{buyInPrice}</div>
+                               </div>
+                               <div className="text-slate-400">
+                                 <div>{t.rebuyLabel}</div>
+                                 <div className="text-slate-200 font-medium">{getCurrencySymbol()}{rebuyPrice}</div>
+                               </div>
+                             </div>
+                             <div className="border-t border-slate-600 pt-2 mt-2">
+                               <div className="text-xs text-slate-400">
+                                 <div>{t.currentRebuys}</div>
+                                 <div className="text-slate-200 font-medium">{Object.values(rebuyCounts).reduce((sum, count) => sum + count, 0)}</div>
+                               </div>
+                               <div className="text-xs text-slate-400 mt-1">
+                                 <div>{t.totalPrizePool}</div>
+                                 <div className="text-emerald-300 font-bold text-sm">{getCurrencySymbol()}{totalPrizePool}</div>
+                               </div>
+                             </div>
+                         </div>
                        </div>
                      </div>
                    </div>
                  </div>
                </div>
-                         </div>
-                )}
+             </div>
+           )}
 
-                                                                                                               {/* Enhanced Spotify Widget - Only show on main tournament tab */}
-                                {isAdminMode === false && (
-                                  <div className="spotify-widget bg-gradient-to-br from-slate-800/80 to-slate-900/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg mt-6 min-h-fit">
-                   <div className="flex items-center gap-3 mb-6">
-                     <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg">
-                       <span className="text-2xl">🎵</span>
-                     </div>
-                     <div>
-                       <h2 className="text-2xl font-bold text-slate-100">Spotify Music</h2>
-                       <p className="text-slate-400 text-sm">Set the mood for your tournament</p>
-                     </div>
+           {/* Enhanced Spotify Widget - Only show on main tournament tab */}
+           {isAdminMode === false && (
+             <div className="spotify-widget bg-gradient-to-br from-slate-800/80 to-slate-900/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg mt-6 min-h-fit">
+               <div className="flex items-center gap-3 mb-6">
+                 <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg">
+                   <span className="text-2xl">🎵</span>
+                 </div>
+                 <div>
+                   <h2 className="text-2xl font-bold text-slate-100">{t.spotifyMusic}</h2>
+                   <p className="text-slate-400 text-sm">{t.setMood}</p>
+                 </div>
+               </div>
+               
+               <div className="space-y-6">
+                 {/* Input Section */}
+                 <div className="bg-slate-900/40 rounded-xl p-4 border border-slate-600/50">
+                   <label className="block text-slate-300 text-sm font-medium mb-3">
+                     🎯 {t.pasteSpotifyLink}
+                   </label>
+                   <div className="flex gap-3">
+                     <input
+                       className="flex-1 bg-slate-800/60 border border-slate-600 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all"
+                       type="text"
+                       value={spotifyUrl}
+                       onChange={(e) => setSpotifyUrl(e.target.value)}
+                       placeholder="https://open.spotify.com/track/... or https://open.spotify.com/playlist/..."
+                       onKeyPress={(e) => e.key === 'Enter' && handleSpotifyPlay()}
+                     />
+                     <button 
+                       className={`px-6 py-3 rounded-lg font-semibold transition-all transform hover:scale-105 active:scale-95 ${
+                         spotifyUrl.trim() 
+                           ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg' 
+                           : 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                       }`}
+                       onClick={handleSpotifyPlay}
+                       disabled={!spotifyUrl.trim()}
+                     >
+                       {spotifyUrl.trim() ? t.play : t.enterUrl}
+                     </button>
                    </div>
-                   
-                   <div className="space-y-6">
-                     {/* Input Section */}
-                     <div className="bg-slate-900/40 rounded-xl p-4 border border-slate-600/50">
-                       <label className="block text-slate-300 text-sm font-medium mb-3">
-                         🎯 Paste a Spotify link below to play music during your tournament:
-                       </label>
-                 <div className="flex gap-3">
-                   <input
-                           className="flex-1 bg-slate-800/60 border border-slate-600 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all"
-                     type="text"
-                     value={spotifyUrl}
-                     onChange={(e) => setSpotifyUrl(e.target.value)}
-                     placeholder="https://open.spotify.com/track/... or https://open.spotify.com/playlist/..."
-                     onKeyPress={(e) => e.key === 'Enter' && handleSpotifyPlay()}
-                   />
-                   <button 
-                           className={`px-6 py-3 rounded-lg font-semibold transition-all transform hover:scale-105 active:scale-95 ${
-                             spotifyUrl.trim() 
-                               ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white shadow-lg' 
-                               : 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                           }`}
-                     onClick={handleSpotifyPlay}
-                           disabled={!spotifyUrl.trim()}
-                   >
-                           {spotifyUrl.trim() ? '▶️ Play' : '🔒 Enter URL'}
-                   </button>
-                       </div>
-                       {spotifyUrl.trim() && (
-                         <div className="mt-3 text-xs text-slate-400">
-                           💡 Press Enter to play instantly
-                         </div>
-                       )}
+                   {spotifyUrl.trim() && (
+                     <div className="mt-3 text-xs text-slate-400">
+                       {t.pressEnter}
+                     </div>
+                   )}
                  </div>
                  
-                     {/* Player Section */}
+                 {/* Player Section */}
                  {currentTrack ? (
-                       <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/40 rounded-xl p-6 border border-slate-600/50 shadow-inner">
-                         <div className="flex items-center justify-between mb-4">
-                           <div className="flex items-center gap-3">
-                             <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center animate-pulse">
-                               <div className="w-2 h-2 bg-white rounded-full"></div>
-                             </div>
-                             <span className="text-slate-200 font-semibold">Now Playing</span>
-                           </div>
+                   <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/40 rounded-xl p-6 border border-slate-600/50 shadow-inner">
+                     <div className="flex items-center justify-between mb-4">
+                       <div className="flex items-center gap-3">
+                         <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center animate-pulse">
+                           <div className="w-2 h-2 bg-white rounded-full"></div>
+                         </div>
+                         <span className="text-slate-200 font-semibold">{t.nowPlaying}</span>
+                       </div>
                        <button
-                             className="px-4 py-2 text-sm rounded-lg bg-red-600/80 hover:bg-red-500 text-white font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg"
+                         className="px-4 py-2 text-sm rounded-lg bg-red-600/80 hover:bg-red-500 text-white font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg"
                          onClick={() => setCurrentTrack(null)}
                        >
-                             🛑 Stop
+                         {t.stop}
                        </button>
                      </div>
-                         
-                                                                        <div className="bg-black/20 rounded-lg p-2 border border-slate-600/30 overflow-hidden h-96">
-                                           <iframe
-                        src={`${extractSpotifyEmbedUrl(currentTrack.url)}?theme=0`}
-                        width="100%"
-                             height="100%"
-                        frameBorder="0"
-                        allowFullScreen=""
-                        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                        loading="lazy"
-                             className="rounded-lg w-full h-full"
-                        style={{
-                               backgroundColor: 'transparent',
-                               border: 'none',
-                               outline: 'none'
-                        }}
-                      ></iframe>
-                         </div>
-                        
-                         <div className="mt-4 text-center">
-                           <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-full">
-                             <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                             <span className="text-green-300 text-sm font-medium">Music is playing</span>
-                           </div>
-                         </div>
+                     
+                     <div className="bg-black/20 rounded-lg p-2 border border-slate-600/30 overflow-hidden h-96">
+                       <iframe
+                         src={`${extractSpotifyEmbedUrl(currentTrack.url)}?theme=0`}
+                         width="100%"
+                         height="100%"
+                         frameBorder="0"
+                         allowFullScreen=""
+                         allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                         loading="lazy"
+                         className="rounded-lg w-full h-full"
+                         style={{
+                           backgroundColor: 'transparent',
+                           border: 'none',
+                           outline: 'none'
+                         }}
+                       ></iframe>
+                     </div>
+                     
+                     <div className="mt-4 text-center">
+                       <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-full">
+                         <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                         <span className="text-green-300 text-sm font-medium">{t.musicPlaying}</span>
+                       </div>
+                     </div>
                    </div>
                  ) : (
-                       <div className="bg-gradient-to-br from-slate-900/40 to-slate-800/20 rounded-xl p-8 border border-slate-600/30 text-center">
-                         <div className="w-20 h-20 bg-gradient-to-br from-slate-700 to-slate-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
-                           <span className="text-4xl">🎵</span>
-                         </div>
-                         <div className="text-slate-200 text-xl font-semibold mb-2">No music playing</div>
-                         <div className="text-slate-400 text-sm mb-4">Paste a Spotify link above and click Play to start</div>
-                         <div className="flex items-center justify-center gap-4 text-xs text-slate-500">
-                           <div className="flex items-center gap-1">
-                             <span>🎧</span>
-                             <span>Supports tracks, playlists & albums</span>
-                           </div>
-                           <div className="flex items-center gap-1">
-                             <span>🎮</span>
-                             <span>Perfect for tournaments</span>
-                           </div>
+                   <div className="bg-gradient-to-br from-slate-900/40 to-slate-800/20 rounded-xl p-8 border border-slate-600/30 text-center">
+                     <div className="w-20 h-20 bg-gradient-to-br from-slate-700 to-slate-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                       <span className="text-4xl">🎵</span>
+                     </div>
+                     <div className="text-slate-200 text-xl font-semibold mb-2">{t.noMusicPlaying}</div>
+                     <div className="text-slate-400 text-sm mb-4">{t.pasteLinkAndPlay}</div>
+                     <div className="flex items-center justify-center gap-4 text-xs text-slate-500">
+                       <div className="flex items-center gap-1">
+                         <span>🎧</span>
+                         <span>{t.supportsTracks}</span>
+                       </div>
+                       <div className="flex items-center gap-1">
+                         <span>🎮</span>
+                         <span>{t.perfectForTournaments}</span>
+                       </div>
                      </div>
                    </div>
                  )}
-                     
-                     {/* Quick Actions */}
-                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                       <button 
-                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
-                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M')}
-                       >
-                         🎯 Today's Top Hits
-                       </button>
-                       <button 
-                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
-                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX5Vy6DFOcx00')}
-                       >
-                         🎸 Rock Classics
-                       </button>
-                       <button 
-                         className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
-                         onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX4WYpdgoIcn6')}
-                       >
-                         🎵 Chill Vibes
-                       </button>
+                 
+                 {/* Quick Actions */}
+                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                   <button 
+                     className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                     onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M')}
+                   >
+                     🎯 {t.todaysTopHits}
+                   </button>
+                   <button 
+                     className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                     onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX5Vy6DFOcx00')}
+                   >
+                     🎸 {t.rockClassics}
+                   </button>
+                   <button 
+                     className="p-3 bg-slate-700/40 hover:bg-slate-600/40 border border-slate-600/50 rounded-lg text-slate-300 text-sm font-medium transition-all hover:scale-105 active:scale-95"
+                     onClick={() => setSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DX4WYpdgoIcn6')}
+                   >
+                     🎵 {t.chillVibes}
+                   </button>
+                 </div>
                </div>
              </div>
-                 </div>
-                                )}
+           )}
 
                                          {/* Prize Calculator Tab */}
               {isAdminMode === 'prize' && (
@@ -1770,37 +3204,49 @@
                     {/* Input Section */}
                     <div className="space-y-4">
                       <div>
-                        <label className="text-slate-300 text-sm block mb-2">{t.prizePool}</label>
-                        <input
-                          className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
-                          type="number"
-                          min="0"
-                          value={prizePool}
-                          onChange={(e) => setPrizePool(Number(e.target.value))}
-                          placeholder="1000"
-                        />
+                        <label className="text-slate-300 text-sm block mb-2">Total Prize Pool (Auto-calculated)</label>
+                        <div className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 text-lg font-mono">
+                          {getCurrencySymbol()}{totalPrizePool}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1">
+                                           {t.buyInsLabel} {getCurrencySymbol()}{buyInPrice} × {numPlayers} = {getCurrencySymbol()}{buyInPrice * numPlayers} |
+                 {t.rebuysLabel} {Object.values(rebuyCounts).reduce((sum, count) => sum + count, 0)} × {getCurrencySymbol()}{rebuyPrice} = {getCurrencySymbol()}{Object.values(rebuyCounts).reduce((sum, count) => sum + (count * rebuyPrice), 0)}
+                        </div>
                       </div>
                       
-                                               <div>
-                           <label className="text-slate-300 text-sm block mb-2">{t.ratioLabel}</label>
-                           <input
-                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
-                             type="text"
-                             value={ratioInput}
-                             onChange={(e) => setRatioInput(e.target.value)}
-                             placeholder={Array.from({ length: numWinners }, (_, i) => 
-                               i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
-                             ).join('/')}
-                           />
-                           <div className="text-xs text-slate-500 mt-1">
-                             Enter {numWinners} numbers separated by / (e.g., {Array.from({ length: numWinners }, (_, i) => 
-                               i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
-                             ).join('/')})
-                           </div>
-                         </div>
+                      <div>
+                        <label className="text-slate-300 text-sm block mb-2">{t.ratioLabel}</label>
+                        <input
+                          className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                          type="text"
+                          value={ratioInput}
+                          onChange={(e) => setRatioInput(e.target.value)}
+                          placeholder={Array.from({ length: numWinners }, (_, i) => 
+                            i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
+                          ).join('/')}
+                        />
+                        <div className="text-xs text-slate-500 mt-1">
+                          {t.enterNumbersSeparated.replace('{numWinners}', numWinners).replace('{example}', Array.from({ length: numWinners }, (_, i) => 
+                            i === 0 ? '50' : i === 1 ? '30' : i === 2 ? '20' : Math.max(5, 20 - (i * 5))
+                          ).join('/'))}
+                        </div>
+                      </div>
                     </div>
                     
-                                         {/* Results Section */}
+                    {/* Info Note */}
+                    <div className="col-span-1 md:col-span-2 mb-4">
+                      <div className="bg-blue-600/20 border border-blue-500/30 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-blue-400">ℹ️</span>
+                          <span className="text-blue-200 font-medium">{t.automaticPrizeCalculation}</span>
+                        </div>
+                        <div className="text-blue-100 text-sm">
+                          {t.prizePoolAutoCalc}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Results Section */}
                      <div className="space-y-4">
                        {prizeDistribution.map((prize, index) => {
                          const placeColors = [
@@ -1819,14 +3265,14 @@
                          const colors = placeColors[index] || placeColors[0]
                          const placeNames = [
                            t.firstPlace, t.secondPlace, t.thirdPlace,
-                           '4th Place', '5th Place', '6th Place', '7th Place', '8th Place', '9th Place', '10th Place'
+                           t.place4th, t.place5th, t.place6th, t.place7th, t.place8th, t.place9th, t.place10th
                          ]
                          
                          return (
                            <div key={index} className={`bg-gradient-to-br ${colors.bg} border ${colors.border} rounded-xl p-6`}>
                              <div className="text-center mb-4">
                                <div className={`text-sm ${colors.text} mb-1`}>{placeNames[index]}</div>
-                               <div className={`text-2xl font-bold ${colors.value}`}>${prize}</div>
+                               <div className={`text-2xl font-bold ${colors.value}`}>{getCurrencySymbol()}{prize}</div>
                              </div>
                            </div>
                          )
@@ -1843,172 +3289,445 @@
                   <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
                     <h2 className="text-2xl font-semibold text-slate-100 mb-6">⚙️ {t.tournamentSettings}</h2>
                     
-                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       {/* Number of Winners Setting */}
-                       <div className="space-y-4">
-                         <div>
-                           <label className="text-slate-300 text-sm block mb-2">{t.numWinners}</label>
-                           <input
-                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
-                             type="number"
-                             min="1"
-                             max="10"
-                             value={numWinners}
-                             onChange={(e) => setNumWinners(Number(e.target.value))}
-                             placeholder="3"
-                           />
-                           <div className="text-xs text-slate-500 mt-1">
-                             Number of players who will receive prizes
+                    {/* Start Game Notice */}
+                    {!gameStarted && (
+                      <div className="bg-amber-600/20 border border-amber-500/30 rounded-lg p-4 mb-6">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-amber-400">⚠️</span>
+                          <span className="text-amber-200 font-medium">{t.tournamentSetupMode}</span>
+                        </div>
+                        <div className="text-amber-100 text-sm">
+                          {t.canStillModify}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {gameStarted && (
+                      <div className="bg-emerald-600/20 border border-emerald-500/30 rounded-lg p-4 mb-6">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-emerald-400">🔒</span>
+                          <span className="text-emerald-200 font-medium">{t.tournamentActiveSettingsLocked}</span>
+                        </div>
+                        <div className="text-emerald-100 text-sm">
+                          {t.tournamentStartedSettingsLocked}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
+                      {/* Number of Winners Setting */}
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-slate-300 text-sm block mb-2">{t.numWinners}</label>
+                          <input
+                            className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={numWinners}
+                            onChange={(e) => setNumWinners(Number(e.target.value))}
+                            placeholder="3"
+                          />
+                          <div className="text-xs text-slate-500 mt-1">
+                             {t.winnersHelper}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Addon Time Setting */}
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-slate-300 text-sm block mb-2">{t.addonTime}</label>
+                          <input
+                            className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                            type="text"
+                            value={addonTime}
+                            onChange={(e) => {
+                              const newTime = e.target.value
+                              setAddonTime(newTime)
+                              // Reset addon break state when time changes or is cleared
+                              if (newTime === '' || newTime !== addonTime) {
+                                setAddonBreakTriggered(false)
+                                setAddonBreakPending(false)
+                                console.log('🔄 Addon time changed, resetting break state')
+                              }
+                            }}
+                            placeholder="20:30"
+                            pattern="^([0-1]?[0-9]|2[0-5][0-9]):[0-5][0-9]$"
+                          />
+                          <div className="text-xs text-slate-500 mt-1">
+                             {t.addonTimeHelper}
+                          </div>
+                          
+                          {/* Addon Time Validation */}
+                          {addonTime && (
+                            (() => {
+                              const now = new Date()
+                              const currentHour = now.getHours()
+                              const currentMinute = now.getMinutes()
+                              const [targetHour, targetMinute] = addonTime.split(':').map(Number)
+                              
+                              if (targetHour !== undefined && targetMinute !== undefined) {
+                                const currentTotalMinutes = currentHour * 60 + currentMinute
+                                const targetTotalMinutes = targetHour * 60 + targetMinute
+                                
+                                if (targetTotalMinutes <= currentTotalMinutes) {
+                                  return (
+                                    <div className="text-xs text-red-400 mt-1">
+                                      ⚠️ {t.addonTimeInPast}
+                                    </div>
+                                  )
+                                } else {
+                                  return (
+                                    <div className="text-xs text-green-400 mt-1">
+                                      ✅ {t.addonTimeValid}
+                                    </div>
+                                  )
+                                }
+                              }
+                              return null
+                            })()
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Max Rebuys Setting */}
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-slate-300 text-sm block mb-2">{t.maxRebuys}</label>
+                          <input
+                            className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                            type="number"
+                            min="0"
+                            max="10"
+                            value={maxRebuys}
+                            onChange={(e) => setMaxRebuys(Number(e.target.value))}
+                            placeholder="3"
+                          />
+                          <div className="text-xs text-slate-500 mt-1">
+                             {t.rebuysHelper}
                            </div>
                          </div>
                        </div>
                        
-                       {/* Addon Time Setting */}
-                       <div className="space-y-4">
+                       {/* Buy-in Price Setting */}
+                       <div className="space-y-3">
                          <div>
-                           <label className="text-slate-300 text-sm block mb-2">{t.addonTime}</label>
+                           <label className="text-slate-300 text-sm block mb-2">{t.buyInPrice}</label>
+                           <div className="relative">
                            <input
-                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
-                             type="text"
-                             value={addonTime}
-                             onChange={(e) => setAddonTime(e.target.value)}
-                             placeholder="20:30"
-                             pattern="^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
-                           />
-                           <div className="text-xs text-slate-500 mt-1">
-                             Use 24-hour format (HH:MM). Leave empty to disable. Example: 20:30 for 8:30 PM
-                           </div>
-                         </div>
-                       </div>
-                       
-                       {/* Max Rebuys Setting */}
-                       <div className="space-y-4">
-                         <div>
-                           <label className="text-slate-300 text-sm block mb-2">{t.maxRebuys}</label>
-                           <input
-                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                               className="w-full bg-slate-900/60 border border-slate-700 rounded-lg pl-8 pr-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
                              type="number"
                              min="0"
-                             max="10"
-                             value={maxRebuys}
-                             onChange={(e) => setMaxRebuys(Number(e.target.value))}
-                             placeholder="3"
+                             value={buyInPrice}
+                             onChange={(e) => setBuyInPrice(Number(e.target.value))}
+                             placeholder="50"
                            />
+                             <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-300 text-lg pointer-events-none">{getCurrencySymbol()}</span>
+                           </div>
                            <div className="text-xs text-slate-500 mt-1">
-                             Set to 0 to disable rebuys
+                             {t.buyInHelper}
+                         </div>
+                       </div>
+                     </div>
+                     
+                       {/* Rebuy Price Setting */}
+                       <div className="space-y-3">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.rebuyPrice}</label>
+                           <div className="relative">
+                       <input
+                               className="w-full bg-slate-900/60 border border-slate-700 rounded-lg pl-8 pr-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                         type="number"
+                         min="0"
+                         value={rebuyPrice}
+                         onChange={(e) => setRebuyPrice(Number(e.target.value))}
+                         placeholder="50"
+                       />
+                             <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-300 text-lg pointer-events-none">{getCurrencySymbol()}</span>
+                           </div>
+                       <div className="text-xs text-slate-500 mt-1">
+                             {t.rebuyHelper}
+                           </div>
+                         </div>
+                       </div>
+                       
+                       {/* Currency Setting */}
+                       <div className="space-y-3">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">{t.currency}</label>
+                           <select
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                             value={currency}
+                             onChange={(e) => setCurrency(e.target.value)}
+                           >
+                             <option value="USD">USD ($)</option>
+                             <option value="EUR">EUR (€)</option>
+                             <option value="NIS">NIS (₪)</option>
+                           </select>
+                           <div className="text-xs text-slate-500 mt-1">
+                             {t.currencyHelper}
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                     
+                     {/* Game Management Buttons */}
+                     <div className="mt-6 pt-6 border-t border-slate-600">
+                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                         {/* Clear Saved Game Button */}
+                         <div className="space-y-2">
+                           <button
+                             className="w-full px-4 py-3 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm font-medium transition-colors"
+                             onClick={() => {
+                               if (confirm(t.confirmClearSavedGame)) {
+                                 localStorage.removeItem('pokerTournamentState')
+                                 window.location.reload()
+                               }
+                             }}
+                           >
+                             🗑️ {t.clearSavedGame}
+                           </button>
+                           <div className="text-xs text-slate-400 text-center">
+                             {t.clearGameHelper}
+                           </div>
+                         </div>
+                         
+                         {/* Reset Players Button */}
+                         <div className="space-y-2">
+                           <button
+                             className="w-full px-4 py-3 rounded-md bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium transition-colors"
+                             onClick={() => {
+                               if (confirm(t.confirmResetPlayers)) {
+                                 resetPlayers()
+                               }
+                             }}
+                           >
+                             👥 {t.resetPlayers}
+                           </button>
+                           <div className="text-xs text-slate-400 text-center">
+                             {t.resetPlayersHelper}
+                           </div>
+                         </div>
+                         
+                         {/* Reset Addon Break Button */}
+                         <div className="space-y-2">
+                           <button
+                             className={`w-full px-4 py-3 rounded-md text-white text-sm font-medium transition-colors ${
+                               gameStarted 
+                                 ? 'bg-blue-600 hover:bg-blue-500' 
+                                 : 'bg-slate-500 cursor-not-allowed'
+                             }`}
+                             onClick={() => {
+                               if (!gameStarted) return
+                               if (confirm(t.confirmResetAddonBreak)) {
+                                 resetAddonBreak()
+                               }
+                             }}
+                             disabled={!gameStarted}
+                           >
+                             🔄 {t.addonBreakReset}
+                           </button>
+                           <div className="text-xs text-slate-400 text-center">
+                             {gameStarted ? t.addonBreakReset : t.lockedUntilGameStarts}
+                           </div>
+                         </div>
+                         
+                         {/* Test Addon Break Button */}
+                         <div className="space-y-2">
+                           <button
+                             className={`w-full px-4 py-3 rounded-md text-white text-sm font-medium transition-colors ${
+                               gameStarted 
+                                 ? 'bg-green-600 hover:bg-green-500' 
+                                 : 'bg-slate-500 cursor-not-allowed'
+                             }`}
+                             onClick={() => {
+                               if (!gameStarted) return
+                               if (confirm(t.confirmTestAddonBreak)) {
+                                 startBreak(15)
+                                 setAddonBreakTriggered(true)
+                                 setAddonBreakPending(true)
+                               }
+                             }}
+                             disabled={!gameStarted}
+                           >
+                             🧪 {t.testAddonBreak}
+                           </button>
+                           <div className="text-xs text-slate-400 text-center">
+                             {gameStarted ? t.testAddonBreak : t.lockedUntilGameStarts}
                            </div>
                          </div>
                        </div>
                      </div>
                   </div>
 
-                                     {/* Blind Levels Management Section */}
-                   <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
-                     <div className="flex items-center justify-between mb-6">
-                   <h2 className="text-2xl font-semibold text-slate-100">⚙️ {t.levelsTitle}</h2>
-                   <div className="flex items-center gap-2">
-                     <button
-                       className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
-                       onClick={addBlindLevel}
-                     >
-                       ➕ {t.addLevel}
-                     </button>
-                     <button
-                       className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-sm"
-                       onClick={resetToDefaults}
-                     >
-                       🔄 {t.resetDefaults}
-                     </button>
-                   </div>
-                 </div>
+                  {/* Blind Levels Management Section */}
+                  <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
+                    {/* User Defaults Status */}
+                    {userDefaultLevels && (
+                      <div className="mb-4 p-3 bg-blue-900/30 border border-blue-600 rounded-lg">
+                        <div className="text-sm text-blue-300">
+                          💾 {t.personalDefaultsAvailable}
+                          <span className="text-blue-400 ml-2">
+                            ({userDefaultLevels.levels.length} {t.levels}, 
+                            {t.chip} {userDefaultLevels.lowestChipValue})
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between mb-6">
+                      <h2 className="text-2xl font-semibold text-slate-100">⚙️ {t.levelsTitle}</h2>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-sm"
+                          onClick={addBlindLevel}
+                        >
+                          ➕ {t.addLevel}
+                        </button>
+                        <button
+                          className={`px-3 py-1.5 rounded-md text-white text-sm transition-colors ${
+                            levels.length > 1 
+                              ? 'bg-red-600 hover:bg-red-500' 
+                              : 'bg-slate-500 cursor-not-allowed'
+                          }`}
+                          onClick={removeBlindLevel}
+                          disabled={levels.length <= 1}
+                          title={t.removeLevelHelper}
+                        >
+                          ➖ {t.removeLevel}
+                        </button>
+                        <button
+                          className="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-sm"
+                          onClick={resetToDefaults}
+                        >
+                          🔄 {t.resetDefaults}
+                        </button>
                      
-                     {/* Clear Saved Game Button */}
-                     <div className="mt-4 pt-4 border-t border-slate-600">
                        <button
-                         className="px-4 py-2 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm font-medium"
-                         onClick={() => {
-                           if (confirm('Are you sure you want to clear the saved game? This cannot be undone.')) {
-                             localStorage.removeItem('pokerTournamentState')
-                             window.location.reload()
-                           }
-                         }}
-                       >
-                         🗑️ Clear Saved Game
+                          className="px-3 py-1.5 rounded-md bg-green-600 hover:bg-green-500 text-white text-sm"
+                          onClick={saveUserDefaultLevels}
+                        >
+                          💾 {t.saveUserDefaults}
                        </button>
-                       <div className="text-xs text-slate-400 mt-2">
-                         This will remove all saved progress and restart the application
+                        
+                        <button
+                          className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm"
+                          onClick={restoreUserDefaultLevels}
+                          disabled={!userDefaultLevels}
+                        >
+                          🔄 {t.restoreUserDefaults}
+                        </button>
+                        
+                        <button
+                          className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm"
+                          onClick={clearUserDefaultLevels}
+                          disabled={!userDefaultLevels}
+                        >
+                          🗑️ {t.clearUserDefaults}
+                        </button>
                        </div>
                      </div>
                      
-                     {/* Reset Players Button */}
-                     <div className="mt-4 pt-4 border-t border-slate-600">
+                    {/* Lowest Chip Value, Number of Levels, and Generate Blinds */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                      <div className="space-y-3">
+                        <label className="text-slate-300 text-sm block">{t.lowestChipValue}</label>
+                                                 <input
+                           className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                           type="number"
+                           min="1"
+                           value={lowestChipValue}
+                           onChange={(e) => setLowestChipValue(Number(e.target.value))}
+                           placeholder="25"
+                         />
+                        <div className="text-xs text-slate-500">
+                          {t.lowestChipHelper}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <label className="text-slate-300 text-sm block">{t.numberOfLevels}</label>
+                                                 <input
+                           className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
+                           type="number"
+                           min="1"
+                           max="100"
+                           value={desiredNumberOfLevels}
+                           onChange={(e) => setDesiredNumberOfLevels(Number(e.target.value))}
+                           placeholder="12"
+                         />
+                        <div className="text-xs text-slate-500">
+                          {t.numberOfLevelsHelper}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <label className="text-slate-300 text-sm block">{t.generateBlinds}</label>
                        <button
-                         className="px-4 py-2 rounded-md bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium"
-                         onClick={() => {
-                           if (confirm('Are you sure you want to reset all players? This will clear names, rebuys, and eliminated status.')) {
-                             resetPlayers()
-                           }
-                         }}
-                       >
-                         👥 Reset Players
+                          className="w-full px-4 py-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors"
+                          onClick={generateBlindLevels}
+                        >
+                          🎲 {t.calculateLevels}
                        </button>
-                       <div className="text-xs text-slate-400 mt-2">
-                         This will reset player names, rebuys, and eliminated status while keeping tournament progress
+                        <div className="text-xs text-slate-500">
+                          {t.generateBlindsHelper}
+                        </div>
+                         </div>
+                       </div>
+                     
+
+                       
+                       <div className="overflow-x-auto">
+                         <table className="min-w-full text-sm">
+                           <thead>
+                             <tr className="text-slate-300">
+                               <th className="text-right py-2 pr-4">{t.level}</th>
+                               <th className="text-right py-2 pr-4">{t.smallBlind}</th>
+                               <th className="text-right py-2 pr-4">{t.bigBlind}</th>
+                             </tr>
+                           </thead>
+                           <tbody>
+                             {levels.map((level, index) => (
+                               <tr key={level.level} className="border-t border-slate-700">
+                                 <td className="py-2 pr-4 text-right font-medium">{level.level}</td>
+                                 <td className="py-2 pr-4">
+                                   <input
+                                     className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                     type="number"
+                                     value={level.smallBlind}
+                                     onChange={(e) => {
+                                       const newLevels = [...levels]
+                                       newLevels[index].smallBlind = Number(e.target.value)
+                                       setLevels(newLevels)
+                                     }}
+                                   />
+                                 </td>
+                                 <td className="py-2 pr-4">
+                                   <input
+                                     className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                     type="number"
+                                     value={level.bigBlind}
+                                     onChange={(e) => {
+                                       const newLevels = [...levels]
+                                       newLevels[index].bigBlind = Number(e.target.value)
+                                       setLevels(newLevels)
+                                     }}
+                                   />
+                                 </td>
+                               </tr>
+                             ))}
+                           </tbody>
+                         </table>
+                       </div>
+                     </div>
                    </div>
-                 </div>
-                 
-                 <div className="overflow-x-auto">
-                   <table className="min-w-full text-sm">
-                     <thead>
-                       <tr className="text-slate-300">
-                         <th className="text-right py-2 pr-4">{t.level}</th>
-                         <th className="text-right py-2 pr-4">{t.smallBlind}</th>
-                         <th className="text-right py-2 pr-4">{t.bigBlind}</th>
-                       </tr>
-                     </thead>
-                     <tbody>
-                       {levels.map((level, index) => (
-                         <tr key={level.level} className="border-t border-slate-700">
-                           <td className="py-2 pr-4 text-right font-medium">{level.level}</td>
-                           <td className="py-2 pr-4">
-                             <input
-                               className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                               type="number"
-                               min="0"
-                               value={level.smallBlind}
-                               onChange={(e) => {
-                                 const newLevels = [...levels]
-                                 newLevels[index].smallBlind = Number(e.target.value)
-                                 setLevels(newLevels)
-                               }}
-                             />
-                           </td>
-                           <td className="py-2 pr-4">
-                             <input
-                               className="w-20 text-center bg-slate-900/60 border border-slate-700 rounded-lg px-2 py-1 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                               type="number"
-                               min="0"
-                               value={level.bigBlind}
-                               onChange={(e) => {
-                                 const newLevels = [...levels]
-                                 newLevels[index].bigBlind = Number(e.target.value)
-                                 setLevels(newLevels)
-                               }}
-                             />
-                           </td>
-                         </tr>
-                       ))}
-                     </tbody>
-                   </table>
-                   </div>
-                 </div>
-               </div>
-              )}
+                 )}
                </>
              )}
-          </div>
-        )
-      }
+           </div>
+         )
+       }
 
       const root = ReactDOM.createRoot(document.getElementById('root'))
       root.render(<App />)
