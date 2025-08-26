@@ -27,18 +27,31 @@
         firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         
-        // Generate unique room ID for this session
-        const roomId = generateRoomId();
-        
-        function generateRoomId() {
-            // Generate a 6-character room ID
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let result = '';
-            for (let i = 0; i < 6; i++) {
-                result += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
-            return result;
-        }
+                 // Generate unique room ID for this session
+         const roomId = generateRoomId();
+         
+         // Generate unique device ID
+         const deviceId = generateDeviceId();
+         
+         function generateRoomId() {
+           // Generate a 6-character room ID
+           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+           let result = '';
+           for (let i = 0; i < 6; i++) {
+             result += chars.charAt(Math.floor(Math.random() * chars.length));
+           }
+           return result;
+         }
+         
+         function generateDeviceId() {
+           // Generate a unique device ID
+           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+           let result = '';
+           for (let i = 0; i < 8; i++) {
+             result += chars.charAt(Math.floor(Math.random() * chars.length));
+           }
+           return result;
+         }
     </script>
     
     <style>
@@ -109,7 +122,75 @@
              console.log('🚫 Cannot change player count after game has started')
              return
            }
+           
+           // Validate the new count
+           if (newCount < 2 || newCount > 20) {
+             console.log('🚫 Invalid player count:', newCount, 'Must be between 2 and 20')
+             return
+           }
+           
+           console.log('🔄 Updating player count from', numPlayers, 'to', newCount)
+           
+           // Set flag to prevent useEffect from interfering
+           setIsUpdatingPlayers(true)
+           
+           // Calculate the new players array immediately
+           let newPlayers, newRebuyCounts, newEliminatedIds
+           
+           if (newCount > players.length) {
+             // Add new players
+             newPlayers = [...players]
+             for (let i = players.length; i < newCount; i++) {
+               newPlayers.push({ 
+                 id: i + 1, 
+                 name: t.playerPlaceholder(i + 1)
+               })
+             }
+           } else if (newCount < players.length) {
+             // Remove excess players
+             newPlayers = players.slice(0, newCount)
+             
+             // Also remove rebuys and eliminated status for removed players
+             newRebuyCounts = { ...rebuyCounts }
+             newEliminatedIds = [...eliminatedIds]
+             
+             for (let i = newCount; i < players.length; i++) {
+               delete newRebuyCounts[i + 1]
+               newEliminatedIds = newEliminatedIds.filter(id => id !== i + 1)
+             }
+           } else {
+             // Same count, no changes needed
+             newPlayers = players
+           }
+           
+           // Update all state at once
            setNumPlayers(newCount)
+           setPlayers(newPlayers)
+           if (newRebuyCounts) setRebuyCounts(newRebuyCounts)
+           if (newEliminatedIds) setEliminatedIds(newEliminatedIds)
+           
+           // Sync to Firebase immediately with the new state
+           setTimeout(() => {
+             try {
+               syncGameState({
+                 isRunning,
+                 gameStarted,
+                 players: newPlayers,
+                 eliminatedIds: newEliminatedIds || eliminatedIds,
+                 rebuyCounts: newRebuyCounts || rebuyCounts,
+                 currentLevelIndex,
+                 remainingSeconds,
+                 breakSeconds,
+                 isOnBreak,
+                 addonBreakTriggered,
+                 addonBreakPending,
+                 spotifyUrl,
+                 currentTrack
+               })
+             } catch (error) {
+               console.error('Error syncing to Firebase:', error)
+             }
+           }, 50) // Reduced delay for faster sync
          }
          const [players, setPlayers] = useState(() => 
            Array.from({ length: 6 }, (_, i) => ({ 
@@ -183,6 +264,56 @@
          const [isConnected, setIsConnected] = useState(false)
          const [lastUpdateTime, setLastUpdateTime] = useState(null)
          const [joinRoomCode, setJoinRoomCode] = useState('')
+         const [isUpdatingPlayers, setIsUpdatingPlayers] = useState(false)
+         const [isHost, setIsHost] = useState(false)
+         const [hostId, setHostId] = useState(null)
+         const [isJoiningRoom, setIsJoiningRoom] = useState(false)
+         const [hostLocked, setHostLocked] = useState(false) // Prevent host changes once locked
+         
+         // Protected host setter that respects the lock
+         const setProtectedHost = (newHostStatus) => {
+           if (!hostLocked) {
+             setIsHost(newHostStatus)
+           } else {
+             console.log('🚫 Host status locked - cannot change from', isHost, 'to', newHostStatus)
+           }
+         }
+         
+         // Global host protection - ensure guests can never become host
+         const enforceHostProtection = () => {
+           if (hostLocked && isHost) {
+             console.log('🚨 GLOBAL HOST PROTECTION: Forcing guest status')
+             setIsHost(false)
+           }
+         }
+         
+         // Host status change protection
+         useEffect(() => {
+           if (hostLocked && isHost) {
+             console.log('🚨 HOST STATUS CHANGE PROTECTION: Detected unauthorized host change')
+             setIsHost(false)
+           }
+         }, [isHost, hostLocked])
+         
+         // Force host status check on room join
+         const forceHostStatusCheck = () => {
+           const currentRoomId = getCurrentRoomId()
+           if (currentRoomId && isJoiningRoom) {
+             // Force check the current host status
+             const hostRef = database.ref(`rooms/${currentRoomId}/gameState/hostId`)
+             hostRef.once('value', (snapshot) => {
+               if (snapshot.exists()) {
+                 const existingHostId = snapshot.val()
+                 if (existingHostId !== deviceId) {
+                   console.log('🚨 FORCE HOST CHECK: Setting correct host status')
+                   setHostId(existingHostId)
+                   setProtectedHost(false)
+                   setHostLocked(true)
+                 }
+               }
+             })
+           }
+         }
          
          // Currency configuration
          const currencySymbols = {
@@ -204,40 +335,155 @@
          
          // Firebase real-time database functions
          const getCurrentRoomId = () => {
-           return window.roomId || roomId
+           const currentId = window.roomId || roomId
+           if (!currentId) {
+             console.warn('⚠️ No room ID available')
+           }
+           return currentId
          }
          
          const syncGameState = (gameData) => {
-           const currentRoomId = getCurrentRoomId()
-           const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
-           gameStateRef.set({
-             ...gameData,
-             lastUpdated: Date.now(),
-             updatedBy: 'local'
-           })
+           try {
+             const currentRoomId = getCurrentRoomId()
+             if (!currentRoomId) {
+               console.warn('⚠️ No room ID available, skipping sync')
+               return
+             }
+             
+             const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
+             
+             // Include ALL important game state in the sync
+             const fullGameState = {
+               ...gameData,
+               // Always include these core parameters
+               numPlayers,
+               maxRebuys,
+               addonTime,
+               numWinners,
+               buyInPrice,
+               rebuyPrice,
+               currency,
+               levels,
+               minutesPerLevel,
+               timeFormat,
+               timePerLevelMMSS,
+               prizePool,
+               ratioInput,
+               hostId,
+               lastUpdated: Date.now(),
+               updatedBy: deviceId // Use device ID instead of 'local' for better tracking
+             }
+             
+             console.log('🔄 Syncing to room:', currentRoomId, 'with data:', fullGameState)
+             console.log('📤 Firebase sync details:', {
+               roomId: currentRoomId,
+               updatedBy: fullGameState.updatedBy,
+               rebuyCounts: fullGameState.rebuyCounts,
+               eliminatedIds: fullGameState.eliminatedIds,
+               timestamp: fullGameState.lastUpdated
+             })
+             gameStateRef.set(fullGameState)
+           } catch (error) {
+             console.error('❌ Error syncing to Firebase:', error)
+           }
          }
          
          const listenToGameUpdates = () => {
            const currentRoomId = getCurrentRoomId()
+           if (!currentRoomId) {
+             console.log('⚠️ No room ID available for listener')
+             return
+           }
+           
+           // Clean up any existing listeners first
+           const existingRef = database.ref(`rooms/${currentRoomId}/gameState`)
+           existingRef.off()
+           
+           console.log('🎧 Setting up listener for room:', currentRoomId)
            const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
            gameStateRef.on('value', (snapshot) => {
              const data = snapshot.val()
-             if (data && data.updatedBy !== 'local') {
-               // Update local state with remote changes
-               setLastUpdateTime(data.lastUpdated)
-               if (data.players) setPlayers(data.players)
-               if (data.eliminatedIds) setEliminatedIds(data.eliminatedIds)
-               if (data.rebuyCounts) setRebuyCounts(data.rebuyCounts)
-               if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
-               if (data.remainingSeconds !== undefined) setRemainingSeconds(data.remainingSeconds)
-               if (data.isRunning !== undefined) setIsRunning(data.isRunning)
-               if (data.gameStarted !== undefined) setGameStarted(data.gameStarted)
-               if (data.breakSeconds !== undefined) setBreakSeconds(data.breakSeconds)
-               if (data.isOnBreak !== undefined) setIsOnBreak(data.isOnBreak)
-               if (data.addonBreakTriggered !== undefined) setAddonBreakTriggered(data.addonBreakTriggered)
-               if (data.addonBreakPending !== undefined) setAddonBreakPending(data.addonBreakPending)
-               if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
-               if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
+             
+             // ALWAYS check host status regardless of update source (but respect host lock)
+             if (data && data.hostId !== undefined && !hostLocked) {
+               const correctHostId = data.hostId
+               setHostId(correctHostId)
+               const shouldBeHost = correctHostId === deviceId
+               setProtectedHost(shouldBeHost)
+               
+               // If this device thinks it's host but shouldn't be, log it
+               if (isHost && !shouldBeHost) {
+                 console.log('🚨 HOST OVERRIDE: This device was incorrectly host, now corrected to guest')
+               }
+               
+               console.log('👑 Host status updated:', correctHostId, 'This device is host:', shouldBeHost)
+             }
+             
+             // Process ALL updates, but be smart about preventing infinite loops
+             if (data) {
+               const isFromThisDevice = data.updatedBy === deviceId
+               
+               // Log all updates for debugging
+               console.log('🔄 Database update received:', {
+                 updatedBy: data.updatedBy,
+                 isFromThisDevice,
+                 deviceId
+               })
+               
+               // Update local state with ALL changes (except host status which is handled above)
+               if (!isFromThisDevice) {
+                 console.log('✅ Processing update from:', data.updatedBy)
+                 
+                 // Update local state with remote changes
+                 setLastUpdateTime(data.lastUpdated)
+                 
+                 // Core game state
+                 if (data.players) {
+                   console.log('🔄 Updating players:', data.players)
+                   setPlayers(data.players)
+                 }
+                 if (data.eliminatedIds) {
+                   console.log('🔄 Updating eliminated IDs:', data.eliminatedIds, 'from:', data.updatedBy)
+                   setEliminatedIds(data.eliminatedIds)
+                 }
+                 if (data.rebuyCounts) {
+                   console.log('🔄 Updating rebuy counts:', data.rebuyCounts, 'from:', data.updatedBy)
+                   setRebuyCounts(data.rebuyCounts)
+                 }
+                 if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
+                 if (data.remainingSeconds !== undefined) setRemainingSeconds(data.remainingSeconds)
+                 if (data.isRunning !== undefined) setIsRunning(data.isRunning)
+                 if (data.gameStarted !== undefined) setGameStarted(data.gameStarted)
+                 if (data.breakSeconds !== undefined) setBreakSeconds(data.breakSeconds)
+                 if (data.isOnBreak !== undefined) setIsOnBreak(data.isOnBreak)
+                 if (data.addonBreakTriggered !== undefined) setAddonBreakTriggered(data.addonBreakTriggered)
+                 if (data.addonBreakPending !== undefined) setAddonBreakPending(data.addonBreakPending)
+                 if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
+                 if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
+                 
+                 // Tournament settings
+                 if (data.numPlayers !== undefined) setNumPlayers(data.numPlayers)
+                 if (data.maxRebuys !== undefined) setMaxRebuys(data.maxRebuys)
+                 if (data.addonTime !== undefined) setAddonTime(data.addonTime)
+                 if (data.numWinners !== undefined) setNumWinners(data.numWinners)
+                 if (data.buyInPrice !== undefined) setBuyInPrice(data.buyInPrice)
+                 if (data.rebuyPrice !== undefined) setRebuyPrice(data.rebuyPrice)
+                 if (data.currency !== undefined) setCurrency(data.currency)
+                 
+                 // Blind levels
+                 if (data.levels) setLevels(data.levels)
+                 
+                 // Timer settings
+                 if (data.minutesPerLevel !== undefined) setMinutesPerLevel(data.minutesPerLevel)
+                 if (data.timeFormat !== undefined) setTimeFormat(data.timeFormat)
+                 if (data.timePerLevelMMSS !== undefined) setTimePerLevelMMSS(data.timePerLevelMMSS)
+                 
+                 // Prize calculator
+                 if (data.prizePool !== undefined) setPrizePool(data.prizePool)
+                 if (data.ratioInput !== undefined) setRatioInput(data.ratioInput)
+               } else {
+                 console.log('⏭️ Skipping update from this device to prevent infinite loop')
+               }
              }
            })
          }
@@ -268,27 +514,82 @@
            })
          }
          
+         const handleJoinRoomFromStart = () => {
+           if (!joinRoomCode.trim() || joinRoomCode.length !== 6) {
+             alert(t.enterValidRoomCode)
+             return
+           }
+           
+           // Join the room and unlock the app
+           joinRoom()
+           setIsAppUnlocked(true)
+           setShowAppLogin(false)
+           setSelectedAction(null)
+           setJoinRoomCode('')
+         }
+         
          const joinRoom = () => {
            if (!joinRoomCode.trim() || joinRoomCode.length !== 6) {
              alert(t.enterValidRoomCode)
              return
            }
            
+           const newRoomId = joinRoomCode.toUpperCase()
+           
+           // First, disconnect from current room
+           const currentRoomId = getCurrentRoomId()
+           if (currentRoomId) {
+             const currentGameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
+             currentGameStateRef.off()
+           }
+           
            // Update the global roomId
-           window.roomId = joinRoomCode.toUpperCase()
+           window.roomId = newRoomId
            
            // Update local state
            setJoinRoomCode('')
            
-           // Reconnect to the new room
-           const gameStateRef = database.ref(`rooms/${joinRoomCode.toUpperCase()}/gameState`)
+           // IMPORTANT: When joining a room, we are NEVER the host
+           // Only the first device to create a room becomes the host
+           setProtectedHost(false)
+           setHostLocked(true) // Lock immediately when joining
+           setIsJoiningRoom(true)
+           console.log('🚪 Joining room as guest, not host - HOST LOCKED IMMEDIATELY')
            
-           // Listen for updates in the new room
-           gameStateRef.on('value', (snapshot) => {
+           // Reconnect to the new room
+           const gameStateRef = database.ref(`rooms/${newRoomId}/gameState`)
+           
+           // Force immediate host status check
+           forceHostStatusCheck()
+           
+           // Get initial room data (one-time read)
+           gameStateRef.once('value', (snapshot) => {
              const data = snapshot.val()
+             
+             // IMMEDIATE host check when joining room - ALWAYS run this
+             if (data && data.hostId !== undefined) {
+               const correctHostId = data.hostId
+               setHostId(correctHostId)
+               setProtectedHost(false) // Always false when joining existing room
+               setHostLocked(true) // Lock host status - no more changes
+               console.log('🚨 IMMEDIATE HOST CHECK: Host exists:', correctHostId, 'This device is guest - HOST LOCKED')
+             } else if (data) {
+               // Even if no hostId, if there's any data, this is an existing room
+               // Force this device to be a guest
+               setProtectedHost(false)
+               setHostLocked(true)
+               console.log('🚨 FORCE GUEST: Room has data but no hostId - locking as guest')
+             }
+             
              if (data) {
-               // Update local state with room data
-               if (data.players) setPlayers(data.players)
+               console.log(`🎮 Joining room ${newRoomId} with data:`, data)
+               
+               // Update ALL game state variables
+               if (data.players) {
+                 setPlayers(data.players)
+                 // Also update numPlayers to match the players array length
+                 setNumPlayers(data.players.length)
+               }
                if (data.eliminatedIds) setEliminatedIds(data.eliminatedIds)
                if (data.rebuyCounts) setRebuyCounts(data.rebuyCounts)
                if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
@@ -302,20 +603,80 @@
                if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
                if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
                
-               console.log(`🎮 Joined room ${joinRoomCode.toUpperCase()} successfully!`)
+               // Update tournament settings
+               if (data.maxRebuys !== undefined) setMaxRebuys(data.maxRebuys)
+               if (data.addonTime !== undefined) setAddonTime(data.addonTime)
+               if (data.numWinners !== undefined) setNumWinners(data.numWinners)
+               if (data.buyInPrice !== undefined) setBuyInPrice(data.buyInPrice)
+               if (data.rebuyPrice !== undefined) setRebuyPrice(data.rebuyPrice)
+               if (data.currency !== undefined) setCurrency(data.currency)
+               
+               // Update blind levels
+               if (data.levels) setLevels(data.levels)
+               
+               // Update timer settings
+               if (data.minutesPerLevel !== undefined) setMinutesPerLevel(data.minutesPerLevel)
+               if (data.timeFormat !== undefined) setTimeFormat(data.timeFormat)
+               if (data.timePerLevelMMSS !== undefined) setTimePerLevelMMSS(data.timePerLevelMMSS)
+               
+               // Update prize calculator
+               if (data.prizePool !== undefined) setPrizePool(data.prizePool)
+               if (data.ratioInput !== undefined) setRatioInput(data.ratioInput)
+               
+               // Host information - when joining, we are NEVER the host
+               if (data.hostId !== undefined) {
+                 setHostId(data.hostId)
+                 setProtectedHost(false) // Always false when joining
+                 console.log('👑 Host detected:', data.hostId, 'This device is guest (not host)')
+               } else {
+                 // If no host is set, this device becomes the host (only for empty rooms)
+                 setHostId(deviceId)
+                 setProtectedHost(true)
+                 console.log('👑 No host found, this device becomes host for empty room:', deviceId)
+               }
+               
+               console.log(`🎮 Joined room ${newRoomId} successfully!`)
+               setIsJoiningRoom(false) // Reset joining flag
+               
+               // Set up the listener for ongoing updates in this room
+               listenToGameUpdates()
              } else {
-               console.log(`🏠 Room ${joinRoomCode.toUpperCase()} is empty - starting fresh game`)
+               console.log(`🏠 Room ${newRoomId} is empty - starting fresh game`)
+               // Reset to default state for empty room
+               setPlayers(Array.from({ length: 6 }, (_, i) => ({ 
+                 id: i + 1, 
+                 name: t.playerPlaceholder(i + 1)
+               })))
+               setNumPlayers(6)
+               setEliminatedIds([])
+               setRebuyCounts({})
+               setCurrentLevelIndex(0)
+               setRemainingSeconds(600)
+               setGameStarted(false)
+               setIsRunning(false)
+               setBreakSeconds(0)
+               setIsOnBreak(false)
+               setAddonBreakTriggered(false)
+               setAddonBreakPending(false)
+               
+                                // For empty rooms, the joining device becomes the host
+                 setHostId(deviceId)
+                 setProtectedHost(true)
+                 console.log('👑 Empty room - this device becomes host:', deviceId)
              }
            })
            
            // Update the room display
            const roomElement = document.querySelector('[data-room-id]')
            if (roomElement) {
-             roomElement.textContent = `Room: ${joinRoomCode.toUpperCase()}`
+             roomElement.textContent = `Room: ${newRoomId}`
            }
+           
+           // Clear the input field
+           setJoinRoomCode('')
          }
          
-         // Load saved game state on component mount
+                   // Load saved game state on component mount
          useEffect(() => {
             // Don't automatically restore saved state on mount
             // Let the user choose what to do via the start window
@@ -329,16 +690,142 @@
            // Monitor connection status
            updateConnectionStatus()
            
-           // Cleanup listeners on unmount
+           // Initialize host for this room
+         const initializeHost = () => {
+           const currentRoomId = getCurrentRoomId()
+           if (currentRoomId && !isJoiningRoom) {
+             // Check if this room already has a host
+             const hostRef = database.ref(`rooms/${currentRoomId}/gameState/hostId`)
+             hostRef.once('value', (snapshot) => {
+               if (!snapshot.exists()) {
+                 // No host exists, this device becomes the host
+                 setHostId(deviceId)
+                 setProtectedHost(true)
+                 setHostLocked(false) // Allow host changes for room creator
+                 console.log('👑 This device is now the host')
+                 
+                 // IMMEDIATELY sync the host information to prevent race conditions
+                 const hostData = {
+                   hostId: deviceId,
+                   lastUpdated: Date.now(),
+                   updatedBy: deviceId
+                 }
+                 
+                 // Write host ID directly to prevent other devices from becoming host
+                 database.ref(`rooms/${currentRoomId}/gameState`).update(hostData)
+                 console.log('🚀 Host ID written to database immediately')
+                 
+                 // Then sync the full game state
+                 syncGameState({
+                   isRunning,
+                   gameStarted,
+                   players,
+                   eliminatedIds,
+                   rebuyCounts,
+                   currentLevelIndex,
+                   remainingSeconds,
+                   breakSeconds,
+                   isOnBreak,
+                   addonBreakTriggered,
+                   addonBreakPending,
+                   spotifyUrl,
+                   currentTrack
+                 })
+               } else {
+                 // Host already exists, this device is NOT the host
+                 const existingHostId = snapshot.val()
+                 setHostId(existingHostId)
+                 setProtectedHost(false)
+                 setHostLocked(true) // Lock host status
+                 console.log('👑 Host already exists:', existingHostId, 'This device is NOT the host - HOST LOCKED')
+               }
+             })
+           }
+         }
+           
+                    // Initialize host after a short delay
+         setTimeout(initializeHost, 500)
+         
+         // Cleanup listeners on unmount
            return () => {
              const currentRoomId = getCurrentRoomId()
              const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
              gameStateRef.off()
              
              const connectedRef = database.ref('.info/connected')
+             const hostRef = database.ref(`rooms/${currentRoomId}/gameState/hostId`)
+             hostRef.off()
+             
              connectedRef.off()
            }
-         }, [])
+         }, [roomId]) // Re-run when room changes
+         
+         // Global host protection - ensure guests can never become host
+         useEffect(() => {
+           enforceHostProtection()
+         })
+         
+         // Handle numPlayers changes and update players array (fallback for external changes)
+         useEffect(() => {
+           // Only run this if we haven't manually handled the change in updateNumPlayers
+           // This is mainly for when joining rooms or restoring from saved state
+           if (players.length !== numPlayers && !gameStarted && numPlayers >= 2 && numPlayers <= 20 && !isUpdatingPlayers) {
+             try {
+               console.log('🔄 useEffect: Adjusting players array from', players.length, 'to', numPlayers)
+               
+               if (players.length < numPlayers) {
+                 // Add new players
+                 const newPlayers = [...players]
+                 for (let i = players.length; i < numPlayers; i++) {
+                   newPlayers.push({ 
+                     id: i + 1, 
+                     name: t.playerPlaceholder(i + 1)
+                   })
+                 }
+                 setPlayers(newPlayers)
+                 console.log('✅ useEffect: Added', numPlayers - players.length, 'new players')
+               } else if (players.length > numPlayers) {
+                 // Remove excess players
+                 const newPlayers = players.slice(0, numPlayers)
+                 setPlayers(newPlayers)
+                 
+                 // Also remove rebuys and eliminated status for removed players
+                 const newRebuyCounts = { ...rebuyCounts }
+                 const newEliminatedIds = [...eliminatedIds]
+                 
+                 for (let i = numPlayers; i < players.length; i++) {
+                   delete newRebuyCounts[i + 1]
+                   newEliminatedIds = newEliminatedIds.filter(id => id !== i + 1)
+                 }
+                 
+                 setRebuyCounts(newRebuyCounts)
+                 setEliminatedIds(newEliminatedIds)
+                 console.log('✅ useEffect: Removed', players.length - numPlayers, 'excess players')
+               }
+             } catch (error) {
+               console.error('❌ useEffect: Error updating players array:', error)
+               // Fallback: reset to safe state
+               const fallbackPlayers = Array.from({ length: numPlayers }, (_, i) => ({ 
+                 id: i + 1, 
+                 name: t.playerPlaceholder(i + 1)
+               }))
+               setPlayers(fallbackPlayers)
+               console.log('🔄 useEffect: Reset to fallback state with', numPlayers, 'players')
+             }
+           }
+         }, [numPlayers, gameStarted]) // Removed players.length from dependencies to prevent loops
+         
+         // Reset the updating flag when players array changes
+         useEffect(() => {
+           if (isUpdatingPlayers) {
+             // Reset the flag after a short delay to allow state updates to complete
+             const timer = setTimeout(() => {
+               setIsUpdatingPlayers(false)
+               console.log('✅ Reset isUpdatingPlayers flag')
+             }, 100)
+             return () => clearTimeout(timer)
+           }
+         }, [players.length, isUpdatingPlayers])
          
          // Load user default blind levels on component mount
          useEffect(() => {
@@ -581,7 +1068,8 @@
              enterRoomCode: 'הכנס קוד חדר (למשל ABC123)',
              joinRoom: 'הצטרף לחדר',
              enterValidRoomCode: 'אנא הכנס קוד חדר תקין של 6 תווים',
-             roomCodeHelper: 'הכנס קוד חדר של 6 תווים כדי להצטרף למשחק קיים'
+             roomCodeHelper: 'הכנס קוד חדר של 6 תווים כדי להצטרף למשחק קיים',
+             hostOnly: 'מנהל בלבד'
            },
            en: {
              title: 'Poker Management',
@@ -804,7 +1292,8 @@
              enterRoomCode: 'Enter room code (e.g., ABC123)',
              joinRoom: 'Join Room',
              enterValidRoomCode: 'Please enter a valid 6-character room code',
-             roomCodeHelper: 'Enter a 6-character room code to join an existing game'
+             roomCodeHelper: 'Enter a 6-character room code to join an existing game',
+             hostOnly: 'Host Only'
            }
          }), [])
          
@@ -903,72 +1392,122 @@
            setBreakSeconds(0)
            setIsOnBreak(false)
            // Note: gameStarted remains true - once started, it stays started
+           
+           // Sync game state to Firebase
+           syncGameState({
+             isRunning: false,
+             gameStarted,
+             players,
+             eliminatedIds,
+             rebuyCounts,
+             currentLevelIndex,
+             remainingSeconds: getTimePerLevelInSeconds(),
+             breakSeconds: 0,
+             isOnBreak: false,
+             addonBreakTriggered,
+             addonBreakPending,
+             spotifyUrl,
+             currentTrack
+           })
          }
          
          function toggleEliminated(id) {
-           setEliminatedIds(prev => {
-             const newEliminatedIds = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-             
-             // Sync game state to Firebase
-             syncGameState({
-               isRunning,
-               gameStarted,
-               players,
-               eliminatedIds: newEliminatedIds,
-               rebuyCounts,
-               currentLevelIndex,
-               remainingSeconds,
-               breakSeconds,
-               isOnBreak,
-               addonBreakTriggered,
-               addonBreakPending,
-               spotifyUrl,
-               currentTrack
-             })
-             
-             return newEliminatedIds
+           console.log('🔄 Toggling elimination for player', id, 'current eliminated:', eliminatedIds)
+           
+           // Calculate the new eliminated IDs first
+           const newEliminatedIds = eliminatedIds.includes(id) 
+             ? eliminatedIds.filter(x => x !== id) 
+             : [...eliminatedIds, id]
+           
+           console.log('📊 New eliminated IDs:', newEliminatedIds)
+           
+           // Update local state
+           setEliminatedIds(newEliminatedIds)
+           
+           // Sync game state to Firebase with the NEW eliminated IDs
+           syncGameState({
+             isRunning,
+             gameStarted,
+             players,
+             eliminatedIds: newEliminatedIds, // Use the calculated new value
+             rebuyCounts,
+             currentLevelIndex,
+             remainingSeconds,
+             breakSeconds,
+             isOnBreak,
+             addonBreakTriggered,
+             addonBreakPending,
+             spotifyUrl,
+             currentTrack
+           })
+           
+           console.log('📤 Elimination sync sent to Firebase:', {
+             playerId: id,
+             oldEliminatedIds: eliminatedIds,
+             newEliminatedIds: newEliminatedIds,
+             action: eliminatedIds.includes(id) ? 'uneliminated' : 'eliminated'
            })
          }
          
          function addRebuy(id) {
             const currentRebuys = rebuyCounts[id] || 0
             if (currentRebuys < maxRebuys) {
-              setRebuyCounts(prev => {
-                const newRebuyCounts = { ...prev, [id]: currentRebuys + 1 }
-                
-                // Sync game state to Firebase
-                syncGameState({
-                  isRunning,
-                  gameStarted,
-                  players,
-                  eliminatedIds,
-                  rebuyCounts: newRebuyCounts,
-                  currentLevelIndex,
-                  remainingSeconds,
-                  breakSeconds,
-                  isOnBreak,
-                  addonBreakTriggered,
-                  addonBreakPending,
-                  spotifyUrl,
-                  currentTrack
-                })
-                
-                return newRebuyCounts
+              console.log('🔄 Adding rebuy for player', id, 'current:', currentRebuys, 'max:', maxRebuys)
+              
+              // Calculate new rebuy counts first
+              const newRebuyCounts = { ...rebuyCounts, [id]: currentRebuys + 1 }
+              console.log('📊 New rebuy counts:', newRebuyCounts)
+              
+              // Update local state
+              setRebuyCounts(newRebuyCounts)
+              
+              // Sync game state to Firebase with the NEW rebuy counts
+              syncGameState({
+                isRunning,
+                gameStarted,
+                players,
+                eliminatedIds,
+                rebuyCounts: newRebuyCounts, // Use the calculated new value
+                currentLevelIndex,
+                remainingSeconds,
+                breakSeconds,
+                isOnBreak,
+                addonBreakTriggered,
+                addonBreakPending,
+                spotifyUrl,
+                currentTrack
               })
+              
+              console.log('📤 Rebuy sync sent to Firebase:', {
+                playerId: id,
+                oldRebuys: currentRebuys,
+                newRebuys: newRebuyCounts[id],
+                action: 'added'
+              })
+            } else {
+              console.log('🚫 Cannot add rebuy - max reached for player', id)
             }
          }
          
          function removeRebuy(id) {
-           setRebuyCounts(prev => {
-             const newRebuyCounts = { ...prev, [id]: Math.max(0, (prev[id] || 0) - 1) }
+           const currentRebuys = rebuyCounts[id] || 0
+           if (currentRebuys > 0) {
+             console.log('🔄 Removing rebuy for player', id, 'current:', currentRebuys)
              
-             // Sync game state to Firebase
+             // Calculate new rebuy counts first
+             const newRebuyCounts = { ...rebuyCounts, [id]: Math.max(0, currentRebuys - 1) }
+             console.log('📊 New rebuy counts:', newRebuyCounts)
+             
+             // Update local state
+             setRebuyCounts(newRebuyCounts)
+             
+             // Sync game state to Firebase with the NEW rebuy counts
              syncGameState({
                isRunning,
                gameStarted,
                players,
                eliminatedIds,
-               rebuyCounts: newRebuyCounts,
+               rebuyCounts: newRebuyCounts, // Use the calculated new value
                currentLevelIndex,
                remainingSeconds,
                breakSeconds,
@@ -979,8 +1518,15 @@
                currentTrack
              })
              
-             return newRebuyCounts
-           })
+             console.log('📤 Rebuy sync sent to Firebase:', {
+               playerId: id,
+               oldRebuys: currentRebuys,
+               newRebuys: newRebuyCounts[id],
+               action: 'removed'
+             })
+           } else {
+             console.log('🚫 Cannot remove rebuy - already at 0 for player', id)
+           }
          }
          
          function updatePlayerName(index, name) {
@@ -1018,42 +1564,46 @@
              console.log('🚫 Cannot change seating after game has started')
              return
            }
-           setPlayers(prev => {
-              // Ensure we have the correct number of players
-              if (prev.length !== numPlayers) {
+           
+           // Generate the new seating arrangement
+           let newPlayers
+           if (players.length !== numPlayers) {
                 // Create new players array with correct length
-                const newPlayers = Array.from({ length: numPlayers }, (_, i) => ({ 
+             newPlayers = Array.from({ length: numPlayers }, (_, i) => ({ 
                   id: i + 1, 
                   name: t.playerPlaceholder(i + 1)
                 }))
-                return newPlayers.sort(() => Math.random() - 0.5)
               } else {
                 // Keep original IDs but shuffle the order
-                return [...prev].sort(() => Math.random() - 0.5)
-              }
-            })
-            // Reset rebuy counts and eliminated status when reseating
+             newPlayers = [...players]
+           }
+           
+           // Shuffle the players
+           newPlayers = newPlayers.sort(() => Math.random() - 0.5)
+           
+           // Update local state
+           setPlayers(newPlayers)
             setRebuyCounts({})
             setEliminatedIds([])
-            
-            // Sync game state to Firebase after reseating
-            setTimeout(() => {
-              syncGameState({
-                isRunning,
-                gameStarted,
-                players: players,
-                eliminatedIds: [],
-                rebuyCounts: {},
-                currentLevelIndex,
-                remainingSeconds,
-                breakSeconds,
-                isOnBreak,
-                addonBreakTriggered,
-                addonBreakPending,
-                spotifyUrl,
-                currentTrack
-              })
-            }, 100)
+           
+           // Sync game state to Firebase immediately with the new seating
+           setTimeout(() => {
+             syncGameState({
+               isRunning,
+               gameStarted,
+               players: newPlayers,
+               eliminatedIds: [],
+               rebuyCounts: {},
+               currentLevelIndex,
+               remainingSeconds,
+               breakSeconds,
+               isOnBreak,
+               addonBreakTriggered,
+               addonBreakPending,
+               spotifyUrl,
+               currentTrack
+             })
+           }, 50)
           }
           
           function resetPlayers() {
@@ -1574,12 +2124,12 @@
              setLowestChipValue(userDefaultLevels.lowestChipValue)
              setDesiredNumberOfLevels(userDefaultLevels.desiredNumberOfLevels)
              
-                        // Show success message
+             // Show success message
            alert(t.personalBlindLevelListRestored)
-                        } else {
-               // Show error message
+           } else {
+             // Show error message
                alert(t.noPersonalDefaultsFound)
-             }
+           }
          }
          
          function clearUserDefaultLevels() {
@@ -1683,33 +2233,33 @@
            intervalRef.current = setInterval(() => {
              setRemainingSeconds(prev => {
                const newRemainingSeconds = (() => {
-                 if (prev <= 1) {
-                   // Check if addon break is pending before level progression
-                   if (addonBreakPending && !isOnBreak && gameStarted) {
-                     console.log('🏁 Level ended, starting addon break...')
-                     console.log('📊 Debug - addonBreakPending:', addonBreakPending, 'isOnBreak:', isOnBreak, 'gameStarted:', gameStarted)
-                     
-                     // Start 15-minute break immediately
-                     startBreak(15)
-                     setAddonBreakPending(false)
-                     
-                     // Show notification that break is starting now (only if not in game)
-                     if (!isRunning && !isOnBreak) {
+               if (prev <= 1) {
+                 // Check if addon break is pending before level progression
+                 if (addonBreakPending && !isOnBreak && gameStarted) {
+                   console.log('🏁 Level ended, starting addon break...')
+                   console.log('📊 Debug - addonBreakPending:', addonBreakPending, 'isOnBreak:', isOnBreak, 'gameStarted:', gameStarted)
+                   
+                   // Start 15-minute break immediately
+                   startBreak(15)
+                   setAddonBreakPending(false)
+                   
+                   // Show notification that break is starting now (only if not in game)
+                   if (!isRunning && !isOnBreak) {
                        alert(t.addonBreakStartingNow)
-                     }
-                     
-                     // Don't progress level yet - wait for break to end
-                     return 0
-                   } else {
-                     console.log('🔍 Debug - Level ending check:', {
-                       addonBreakPending,
-                       isOnBreak,
-                       gameStarted,
-                       remainingSeconds: prev
-                     })
                    }
                    
-                                    // Level up (only if no addon break is pending)
+                   // Don't progress level yet - wait for break to end
+                   return 0
+                 } else {
+                   console.log('🔍 Debug - Level ending check:', {
+                     addonBreakPending,
+                     isOnBreak,
+                     gameStarted,
+                     remainingSeconds: prev
+                   })
+                 }
+                 
+                 // Level up (only if no addon break is pending)
                  if (currentLevelIndex < levels.length - 1) {
                    setCurrentLevelIndex(prev => {
                      const newLevelIndex = prev + 1
@@ -1738,15 +2288,15 @@
                    playChime()
                    return getTimePerLevelInSeconds()
                  } else {
-                     // Reached last level - show infinity but keep counting total time
-                     // Only play chime once when reaching the last level, not continuously
-                     if (prev > 0) {
-                     playChime()
-                     }
-                     return 0
+                   // Reached last level - show infinity but keep counting total time
+                   // Only play chime once when reaching the last level, not continuously
+                   if (prev > 0) {
+                   playChime()
                    }
+                   return 0
                  }
-                 return prev - 1
+               }
+               return prev - 1
                })()
                
                // Sync game state to Firebase every 10 seconds to avoid too many updates
@@ -1868,10 +2418,10 @@
                  console.log('🔄 State update check - addonBreakPending should be true:', addonBreakPending)
                }, 100)
                
-                                  // Show notification that break will start at end of current level (only if not in game)
-                   if (!isRunning && !isOnBreak) {
+               // Show notification that break will start at end of current level (only if not in game)
+               if (!isRunning && !isOnBreak) {
                      alert(t.addonTimeReached)
-                   }
+               }
              }
            }, 1000)
            
@@ -2068,6 +2618,11 @@
                   <div id="connectionStatus" className="bg-green-600 px-3 py-2 rounded-lg text-sm">
                     <span>Connected</span>
                   </div>
+                  {isHost && (
+                    <div className="bg-amber-600 px-3 py-2 rounded-lg text-sm">
+                      <span>👑 Host</span>
+                    </div>
+                  )}
                 </div>
                 <div className="text-slate-400 text-sm">
                   {lang === 'he' ? 'שתף קוד חדר זה עם שחקנים אחרים כדי להצטרף לאותו משחק' : 'Share this room code with other players to join the same game'}
@@ -2136,7 +2691,7 @@
                                                              {/* Game Choice Buttons */}
                      <div className="mb-6">
                        <label className="text-slate-300 text-sm block mb-3 font-medium">{t.continueLastGame}:</label>
-                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                          {/* Open Recent Game Button */}
                          <button
                            className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
@@ -2156,7 +2711,7 @@
                                try {
                                  const gameState = JSON.parse(savedState)
                                  console.log('🔍 Parsed game state:', gameState)
-                                 console.log('🔍 Players:', gameState.players?.length || 0)
+                               console.log('🔍 Players:', gameState.numPlayers || 0)
                                  console.log('🔍 Level:', gameState.currentLevelIndex + 1 || 1)
                                  
                                  // Set action to load saved game and show password input
@@ -2175,7 +2730,7 @@
                                  
                                } catch (e) {
                                  console.error('❌ Error parsing saved state:', e)
-                                 alert(t.errorReadingSavedGame)
+                               alert(t.errorReadingSavedGame)
                                }
                      } else {
                                console.log('❌ No saved state found')
@@ -2204,6 +2759,17 @@
                            }}
                          >
                            🃏 {t.newGame}
+                         </button>
+                         
+                         {/* Join Different Room Button */}
+                         <button
+                           className="px-4 py-3 rounded-lg border-2 font-medium transition-all bg-purple-600 border-purple-500 text-white hover:bg-purple-500"
+                           onClick={() => {
+                             // Set action to join room
+                             setSelectedAction('join')
+                           }}
+                         >
+                           🚪 {t.joinDifferentRoom}
                          </button>
                        </div>
                        
@@ -2247,8 +2813,48 @@
                        })()}
                      </div>
                      
+                     {/* Room Joining Section - Only show when join action is selected */}
+                     {selectedAction === 'join' && (
+                       <div className="space-y-4">
+                         <div>
+                           <label className="text-slate-300 text-sm block mb-2">
+                             {t.enterRoomCode}
+                           </label>
+                           <input
+                             className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3 text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                             type="text"
+                             value={joinRoomCode}
+                             onChange={(e) => setJoinRoomCode(e.target.value.toUpperCase())}
+                             placeholder={t.enterRoomCode}
+                             onKeyPress={(e) => e.key === 'Enter' && handleJoinRoomFromStart()}
+                             maxLength={6}
+                             autoFocus
+                           />
+                           <div className="text-slate-400 text-xs mt-2">
+                             {t.roomCodeHelper}
+                           </div>
+                         </div>
+                         
+                         {/* Join Room Action Buttons */}
+                         <div className="flex gap-3">
+                           <button
+                             className="flex-1 px-4 py-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-medium transition-colors"
+                             onClick={handleJoinRoomFromStart}
+                           >
+                             🚪 {t.joinRoom}
+                           </button>
+                           <button
+                             className="px-6 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                             onClick={() => setSelectedAction(null)}
+                           >
+                             ↩️ {t.cancel}
+                           </button>
+                         </div>
+                       </div>
+                     )}
+                     
                      {/* Password Section - Only show when action is selected */}
-                     {selectedAction && (
+                     {selectedAction && selectedAction !== 'join' && (
                      <div className="space-y-4">
 
                        <div>
@@ -2429,18 +3035,23 @@
                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                      isAdminMode === 'admin' 
                        ? 'bg-indigo-600 text-white' 
+                       : !isHost
+                       ? 'bg-slate-500 text-slate-400 cursor-not-allowed'
                        : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
                    }`}
                    onClick={() => {
                      if (isAdminMode === 'admin') {
                        setIsAdminMode(false)
                      } else if (isAdminMode === false || isAdminMode === 'prize') {
+                       if (isHost) {
                        setRequestedAdminMode('admin')
                        setShowAdminLogin(true)
+                       }
                      }
                    }}
+                   disabled={!isHost}
                  >
-                   ⚙️ {t.tournamentSettings}
+                   ⚙️ {t.tournamentSettings} {!isHost && '👑'}
                  </button>
              </div>
 
@@ -2457,13 +3068,13 @@
                      <label className="text-slate-300">{t.playersCount}</label>
                      <select
                        className={`border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                         gameStarted 
+                         gameStarted || !isHost
                            ? 'bg-slate-700/40 border-slate-600 text-slate-400 cursor-not-allowed' 
                            : 'bg-slate-900/60 border-slate-700 text-slate-100'
                        }`}
                        value={numPlayers}
                        onChange={(e) => updateNumPlayers(Number(e.target.value))}
-                       disabled={gameStarted}
+                       disabled={gameStarted || !isHost}
                      >
                        {[2,3,4,5,6,7,8,9].map(n => (
                          <option key={n} value={n}>{n}</option>
@@ -2472,17 +3083,20 @@
                      {gameStarted && (
                        <span className="text-xs text-slate-400">🔒 Locked</span>
                      )}
+                     {!gameStarted && !isHost && (
+                       <span className="text-xs text-amber-400">👑 Host Only</span>
+                     )}
                    </div>
                    <button 
                      className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                       gameStarted 
+                       gameStarted || !isHost
                          ? 'bg-slate-500 text-slate-400 cursor-not-allowed' 
                          : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
                      }`}
                      onClick={seatRandom}
-                     disabled={gameStarted}
+                     disabled={gameStarted || !isHost}
                    >
-                     {gameStarted ? `🔒 ${t.seatingLocked}` : t.randomSeating}
+                     {gameStarted ? `🔒 ${t.seatingLocked}` : !isHost ? `👑 ${t.hostOnly}` : t.randomSeating}
                    </button>
                  </div>
 
@@ -2576,12 +3190,13 @@
                              : `🔒 ${t.locked}`
                            }
                          </button>
+
                        </div>
                        
                        {/* Player Name */}
                        <input
                          className={`w-full border rounded-lg px-3 py-2 text-sm mb-2 ${
-                           gameStarted 
+                           gameStarted || !isHost
                              ? 'bg-slate-700/40 border-slate-600 text-slate-400 cursor-not-allowed' 
                              : 'bg-slate-900/60 border-slate-700 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
                          }`}
@@ -2589,8 +3204,11 @@
                          value={player.name}
                          onChange={(e) => updatePlayerName(idx, e.target.value)}
                          placeholder={t.playerPlaceholder(idx + 1)}
-                         disabled={gameStarted}
+                         disabled={gameStarted || !isHost}
                        />
+                       {!gameStarted && !isHost && (
+                         <div className="text-xs text-amber-400 mb-2">👑 Host Only</div>
+                       )}
                        
                        {/* Rebuy Controls */}
                        <div className="flex items-center justify-between">
@@ -2630,6 +3248,7 @@
                              </span>
                            )}
                        </div>
+
                      </div>
                    ))}
                  </div>
@@ -2639,29 +3258,86 @@
                <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
                  <h2 className="text-2xl font-semibold text-slate-100 mb-4">{t.tournamentTitle}</h2>
                  
+                 {/* Host vs Guest Permissions */}
+                 <div className="mb-4 p-3 bg-slate-700/30 rounded-lg border border-slate-600">
+                   <div className="text-sm text-slate-300 mb-2">
+                     <span className="font-medium">👑 Host Only:</span> Start Game, Pause/Resume, Reset Timer, Break Controls
+                   </div>
+                   <div className="text-sm text-slate-300">
+                     <span className="font-medium">✅ All Players:</span> Rebuys, Eliminations, Player Names (before game starts)
+                   </div>
+                 </div>
+                 
+                 {/* Connection Test */}
+                 <div className="mb-4 p-3 bg-blue-900/20 rounded-lg border border-blue-600">
+                   <div className="text-sm text-blue-300 mb-2">
+                     <span className="font-medium">🔗 Connection Status:</span> {isConnected ? 'Connected' : 'Disconnected'}
+                   </div>
+                   <div className="text-sm text-blue-300 mb-2">
+                     <span className="font-medium">👑 Host Status:</span> {isHost ? 'Host' : 'Guest'}
+                   </div>
+                   <div className="text-sm text-blue-300 mb-2">
+                     <span className="font-medium">🆔 Device ID:</span> {deviceId}
+                   </div>
+                   <div className="text-sm text-blue-300 mb-2">
+                     <span className="font-medium">🏠 Room ID:</span> {getCurrentRoomId()}
+                   </div>
+                   <button 
+                     className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded"
+                     onClick={() => {
+                       console.log('🧪 TEST: Current state:', {
+                         eliminatedIds,
+                         rebuyCounts,
+                         deviceId,
+                         roomId: getCurrentRoomId()
+                       })
+                       // Force a sync to test
+                       syncGameState({
+                         isRunning,
+                         gameStarted,
+                         players,
+                         eliminatedIds,
+                         rebuyCounts,
+                         currentLevelIndex,
+                         remainingSeconds,
+                         breakSeconds,
+                         isOnBreak,
+                         addonBreakTriggered,
+                         addonBreakPending,
+                         spotifyUrl,
+                         currentTrack
+                       })
+                     }}
+                   >
+                     🧪 Test Sync
+                   </button>
+                 </div>
+                 
                  {/* Level Settings */}
                   <div className="space-y-4 mb-4">
                     {/* Time Format Selection */}
                     <div className="flex items-center gap-4">
                    <label className="text-slate-300">{t.levelTime}</label>
                       <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-2 text-slate-300">
+                        <label className={`flex items-center gap-2 ${!isHost ? 'text-slate-400' : 'text-slate-300'}`}>
                           <input
                             type="radio"
                             name="timeFormat"
-                            className="w-4 h-4 accent-indigo-600"
+                            className={`w-4 h-4 ${!isHost ? 'opacity-50' : 'accent-indigo-600'}`}
                             checked={timeFormat === 'minutes'}
-                            onChange={() => setTimeFormat('minutes')}
+                            onChange={() => isHost ? setTimeFormat('minutes') : null}
+                            disabled={!isHost}
                           />
                           {t.minutes}
                         </label>
-                        <label className="flex items-center gap-2 text-slate-300">
+                        <label className={`flex items-center gap-2 ${!isHost ? 'text-slate-400' : 'text-slate-300'}`}>
                           <input
                             type="radio"
                             name="timeFormat"
-                            className="w-4 h-4 accent-indigo-600"
+                            className={`w-4 h-4 ${!isHost ? 'opacity-50' : 'accent-indigo-600'}`}
                             checked={timeFormat === 'mmss'}
-                            onChange={() => setTimeFormat('mmss')}
+                            onChange={() => isHost ? setTimeFormat('mmss') : null}
+                            disabled={!isHost}
                           />
                           {t.mmss}
                         </label>
@@ -2672,11 +3348,16 @@
                     {timeFormat === 'minutes' ? (
                       <div className="flex items-center gap-4">
                    <input
-                     className="w-20 bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                       className={`w-20 border border-slate-700 rounded-lg px-3 py-2 text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                         !isHost
+                           ? 'bg-slate-700/40 border-slate-600 text-slate-400 cursor-not-allowed' 
+                           : 'bg-slate-900/60 border-slate-700 text-slate-100'
+                       }`}
                      type="number"
                      min="1"
                      value={minutesPerLevel}
-                     onChange={(e) => setMinutesPerLevel(Number(e.target.value))}
+                       onChange={(e) => isHost ? setMinutesPerLevel(Number(e.target.value)) : null}
+                       disabled={!isHost}
                    />
                         <span className="text-slate-300">{t.minutes}</span>
                       </div>
@@ -2795,17 +3476,19 @@
                      <div className="text-sm text-slate-300 mb-3">{t.readyToStart}</div>
                      <button 
                        className={`px-8 py-4 rounded-xl font-bold text-lg transition-all transform ${
-                         isAddonTimeValid() 
-                           ? 'hover:scale-105 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white shadow-lg' 
-                           : 'bg-slate-500 text-slate-300 cursor-not-allowed'
+                         !isHost
+                           ? 'bg-slate-500 text-slate-300 cursor-not-allowed'
+                           : isAddonTimeValid() 
+                             ? 'hover:scale-105 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white shadow-lg' 
+                             : 'bg-slate-500 text-slate-300 cursor-not-allowed'
                        }`}
-                       onClick={startGame}
-                       disabled={!isAddonTimeValid()}
+                       onClick={isHost ? startGame : null}
+                       disabled={!isHost || !isAddonTimeValid()}
                      >
                        🚀 {t.startGame}
                      </button>
                      <div className="text-xs text-slate-400 mt-2">
-                       {t.startGameLocked}
+                       {!isHost ? '👑 Host Only' : t.startGameLocked}
                      </div>
                      {!isAddonTimeValid() && (
                        <div className="text-xs text-red-400 mt-2">
@@ -2888,27 +3571,31 @@
                    <div className="flex gap-3 justify-center">
                      <button 
                           className={`px-6 py-3 rounded-lg font-medium transition-colors ${
-                            !gameStarted
-                              ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
-                              : isOnBreak 
+                            !isHost
+                              ? 'bg-slate-500 text-slate-300 cursor-not-allowed'
+                              : !gameStarted
                                 ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
-                                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                                : isOnBreak 
+                                  ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
+                                  : 'bg-indigo-600 hover:bg-indigo-500 text-white'
                           }`}
-                       onClick={handleStartPause}
-                          disabled={!gameStarted || isOnBreak}
+                       onClick={isHost ? handleStartPause : null}
+                          disabled={!isHost || !gameStarted || isOnBreak}
                      >
-                       {!gameStarted ? t.startGameFirst : (isRunning ? t.pause : t.resume)}
+                       {!isHost ? '👑 Host Only' : (!gameStarted ? t.startGameFirst : (isRunning ? t.pause : t.resume))}
                      </button>
                      <button 
                        className={`px-6 py-3 rounded-lg font-medium transition-colors ${
-                         !gameStarted 
-                           ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
-                           : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                         !isHost
+                           ? 'bg-slate-500 text-slate-300 cursor-not-allowed'
+                           : !gameStarted 
+                             ? 'bg-slate-500 text-slate-300 cursor-not-allowed' 
+                             : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
                        }`}
-                       onClick={handleReset}
-                       disabled={!gameStarted}
+                       onClick={isHost ? handleReset : null}
+                       disabled={!isHost || !gameStarted}
                      >
-                       {t.reset}
+                       {!isHost ? '👑 Host Only' : t.reset}
                      </button>
                    </div>
                  </div>
@@ -2923,34 +3610,34 @@
                        <div className="flex gap-2 justify-center mb-3">
                          <button
                            className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
-                             !gameStarted
+                             !isHost || !gameStarted
                                ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
                                : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
                            }`}
-                           onClick={() => startBreak(5)}
-                           disabled={!gameStarted}
+                           onClick={isHost ? (() => startBreak(5)) : null}
+                           disabled={!isHost || !gameStarted}
                          >
                            5m
                          </button>
                          <button
                            className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
-                             !gameStarted
+                             !isHost || !gameStarted
                                ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
                                : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
                            }`}
-                           onClick={() => startBreak(10)}
-                           disabled={!gameStarted}
+                           onClick={isHost ? (() => startBreak(10)) : null}
+                           disabled={!isHost || !gameStarted}
                          >
                            10m
                          </button>
                          <button
                            className={`px-3 py-2 text-xs rounded-md border w-12 text-center ${
-                             !gameStarted
+                             !isHost || !gameStarted
                                ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed' 
                                : 'bg-slate-700/60 border-slate-600 text-slate-100 hover:bg-slate-600/60'
                            }`}
-                           onClick={() => startBreak(15)}
-                           disabled={!gameStarted}
+                           onClick={isHost ? (() => startBreak(15)) : null}
+                           disabled={!isHost || !gameStarted}
                          >
                            15m
                          </button>
@@ -2958,16 +3645,16 @@
                        <div className="w-full flex justify-center">
                          <button
                            className={`px-4 py-2 text-xs rounded-md border font-medium w-20 text-center ${
-                             !gameStarted
+                             !isHost || !gameStarted
                                ? 'bg-slate-500/60 border-slate-500 text-slate-400 cursor-not-allowed'
                                : isOnBreak && breakSeconds > 0
                                  ? 'bg-amber-600/60 border-amber-600 text-amber-100'
                                  : 'bg-slate-700/60 border-slate-600 text-slate-100'
                            }`}
-                           onClick={toggleBreakPause}
-                           disabled={!gameStarted || breakSeconds === 0}
+                           onClick={isHost ? toggleBreakPause : null}
+                           disabled={!isHost || !gameStarted || breakSeconds === 0}
                          >
-                           {!gameStarted ? t.startGameFirst : (isOnBreak ? t.pause : t.resume)}
+                           {!isHost ? '👑 Host' : (!gameStarted ? t.startGameFirst : (isOnBreak ? t.pause : t.resume))}
                          </button>
                        </div>
                        
@@ -3401,7 +4088,28 @@
                             min="0"
                             max="10"
                             value={maxRebuys}
-                            onChange={(e) => setMaxRebuys(Number(e.target.value))}
+                            onChange={(e) => {
+                              const newValue = Number(e.target.value)
+                              setMaxRebuys(newValue)
+                              // Sync to Firebase
+                              setTimeout(() => {
+                                syncGameState({
+                                  isRunning,
+                                  gameStarted,
+                                  players,
+                                  eliminatedIds,
+                                  rebuyCounts,
+                                  currentLevelIndex,
+                                  remainingSeconds,
+                                  breakSeconds,
+                                  isOnBreak,
+                                  addonBreakTriggered,
+                                  addonBreakPending,
+                                  spotifyUrl,
+                                  currentTrack
+                                })
+                              }, 100)
+                            }}
                             placeholder="3"
                           />
                           <div className="text-xs text-slate-500 mt-1">
@@ -3420,7 +4128,28 @@
                              type="number"
                              min="0"
                              value={buyInPrice}
-                             onChange={(e) => setBuyInPrice(Number(e.target.value))}
+                             onChange={(e) => {
+                               const newValue = Number(e.target.value)
+                               setBuyInPrice(newValue)
+                               // Sync to Firebase
+                               setTimeout(() => {
+                                 syncGameState({
+                                   isRunning,
+                                   gameStarted,
+                                   players,
+                                   eliminatedIds,
+                                   rebuyCounts,
+                                   currentLevelIndex,
+                                   remainingSeconds,
+                                   breakSeconds,
+                                   isOnBreak,
+                                   addonBreakTriggered,
+                                   addonBreakPending,
+                                   spotifyUrl,
+                                   currentTrack
+                                 })
+                               }, 100)
+                             }}
                              placeholder="50"
                            />
                              <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-300 text-lg pointer-events-none">{getCurrencySymbol()}</span>
@@ -3441,7 +4170,28 @@
                          type="number"
                          min="0"
                          value={rebuyPrice}
-                         onChange={(e) => setRebuyPrice(Number(e.target.value))}
+                         onChange={(e) => {
+                           const newValue = Number(e.target.value)
+                           setRebuyPrice(newValue)
+                           // Sync to Firebase
+                           setTimeout(() => {
+                             syncGameState({
+                               isRunning,
+                               gameStarted,
+                               players,
+                               eliminatedIds,
+                               rebuyCounts,
+                               currentLevelIndex,
+                               remainingSeconds,
+                               breakSeconds,
+                               isOnBreak,
+                               addonBreakTriggered,
+                               addonBreakPending,
+                               spotifyUrl,
+                               currentTrack
+                             })
+                           }, 100)
+                         }}
                          placeholder="50"
                        />
                              <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-300 text-lg pointer-events-none">{getCurrencySymbol()}</span>
@@ -3459,7 +4209,28 @@
                            <select
                              className="w-full bg-slate-900/60 border border-slate-700 rounded-lg px-3 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg"
                              value={currency}
-                             onChange={(e) => setCurrency(e.target.value)}
+                             onChange={(e) => {
+                               const newValue = e.target.value
+                               setCurrency(newValue)
+                               // Sync to Firebase
+                               setTimeout(() => {
+                                 syncGameState({
+                                   isRunning,
+                                   gameStarted,
+                                   players,
+                                   eliminatedIds,
+                                   rebuyCounts,
+                                   currentLevelIndex,
+                                   remainingSeconds,
+                                   breakSeconds,
+                                   isOnBreak,
+                                   addonBreakTriggered,
+                                   addonBreakPending,
+                                   spotifyUrl,
+                                   currentTrack
+                                 })
+                               }, 100)
+                             }}
                            >
                              <option value="USD">USD ($)</option>
                              <option value="EUR">EUR (€)</option>

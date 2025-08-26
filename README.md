@@ -51,7 +51,7 @@ A professional, feature-rich poker tournament management application built with 
 
 ## 📞 Support
 
-For questions or support, please contact the developer.
+For questions or support, please contact the developer: Ido Abekasis +972549250768.
 
 ---
 
