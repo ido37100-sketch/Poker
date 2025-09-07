@@ -32,6 +32,7 @@
          
          // Generate unique device ID
          const deviceId = generateDeviceId();
+        // console.log('🚀 STARTUP: Device ID for this tab:', deviceId);
          
          function generateRoomId() {
            // Generate a 6-character room ID
@@ -44,12 +45,14 @@
          }
          
          function generateDeviceId() {
-           // Generate a unique device ID
-           const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-           let result = '';
-           for (let i = 0; i < 8; i++) {
-             result += chars.charAt(Math.floor(Math.random() * chars.length));
-           }
+          // Generate a highly unique device ID using multiple entropy sources
+          const timestamp = Date.now().toString(36);
+          const randomPart1 = Math.random().toString(36).substring(2, 8);
+          const randomPart2 = (Math.random() * 999999).toString(36);
+          const performanceNow = performance.now().toString(36).replace('.', '');
+          const combined = timestamp + randomPart1 + randomPart2 + performanceNow;
+          const result = combined.toUpperCase().substring(0, 12);
+          // console.log('🆔 Generated device ID:', result);
            return result;
          }
     </script>
@@ -119,17 +122,17 @@
          // Wrapper function to prevent player count changes after game starts
          const updateNumPlayers = (newCount) => {
            if (gameStarted) {
-             console.log('🚫 Cannot change player count after game has started')
+             // console.log('🚫 Cannot change player count after game has started')
              return
            }
            
            // Validate the new count
            if (newCount < 2 || newCount > 20) {
-             console.log('🚫 Invalid player count:', newCount, 'Must be between 2 and 20')
+             // console.log('🚫 Invalid player count:', newCount, 'Must be between 2 and 20')
              return
            }
            
-           console.log('🔄 Updating player count from', numPlayers, 'to', newCount)
+           // console.log('🚨🚨🚨 HOST: Updating player count from', numPlayers, 'to', newCount)
            
            // Set flag to prevent useEffect from interfering
            setIsUpdatingPlayers(true)
@@ -172,6 +175,7 @@
            // Sync to Firebase immediately with the new state
            setTimeout(() => {
              try {
+              // console.log('🚨🚨🚨 HOST: SYNCING NEW PLAYER ARRANGEMENT to Firebase:', newPlayers)
                syncGameState({
                  isRunning,
                  gameStarted,
@@ -188,7 +192,7 @@
                  currentTrack
                })
              } catch (error) {
-               console.error('Error syncing to Firebase:', error)
+               // console.error('Error syncing to Firebase:', error)
              }
            }, 50) // Reduced delay for faster sync
          }
@@ -198,7 +202,26 @@
              name: `שחקן ${i + 1}` 
            }))
          )
-         const [eliminatedIds, setEliminatedIds] = useState([])
+         const [eliminatedIds, setEliminatedIdsOriginal] = useState([])
+        
+        // Debug wrapper to catch what's causing elimination resets
+        const setEliminatedIds = (newValue) => {
+          const valueToSet = typeof newValue === 'function' ? newValue(eliminatedIds) : newValue
+          
+          // Only log when someone tries to reset eliminations to empty array
+          if (JSON.stringify(valueToSet) === '[]' && eliminatedIds.length > 0) {
+            // console.log('🚨🚨🚨 WARNING: Someone is trying to RESET eliminatedIds to empty!')
+            // console.log('🚨🚨🚨 Current eliminatedIds:', JSON.stringify(eliminatedIds))
+            // console.log('🚨🚨🚨 Attempted reset to:', JSON.stringify(valueToSet))
+            // console.log('🚨🚨🚨 Call stack:')
+            // const stack = new Error().stack.split('\n').slice(1, 6)
+            // stack.forEach((line, index) => {
+            //   console.log(`🚨🚨🚨 [${index}] ${line.trim()}`)
+            // })
+          }
+          
+          return setEliminatedIdsOriginal(newValue)
+        }
          const [rebuyCounts, setRebuyCounts] = useState({})
          
          // Blind levels
@@ -227,11 +250,14 @@
          const [selectedAction, setSelectedAction] = useState(null) // 'new' or 'load'
          const [isRestoring, setIsRestoring] = useState(false) // Flag to prevent interference during restore
          
-         // Admin mode
-         const [isAdminMode, setIsAdminMode] = useState(false)
-         const [showAdminLogin, setShowAdminLogin] = useState(false)
-         const [adminPassword, setAdminPassword] = useState('')
-                    const [requestedAdminMode, setRequestedAdminMode] = useState(null)
+        // Admin mode
+        const [isAdminMode, setIsAdminMode] = useState(false)
+        const [showAdminLogin, setShowAdminLogin] = useState(false)
+        const [adminPassword, setAdminPassword] = useState('')
+                   const [requestedAdminMode, setRequestedAdminMode] = useState(null)
+        
+        // How to Use section visibility - hidden by default
+        const [showHowToUse, setShowHowToUse] = useState(false)
            
            // Addon break system
            const [addonBreakTriggered, setAddonBreakTriggered] = useState(false)
@@ -249,7 +275,7 @@
          // Tournament pricing
          const [buyInPrice, setBuyInPrice] = useState(50)
          const [rebuyPrice, setRebuyPrice] = useState(50)
-         const [currency, setCurrency] = useState('USD')
+         const [currency, setCurrency] = useState('NIS')
            const [lowestChipValue, setLowestChipValue] = useState(25)
          const [desiredNumberOfLevels, setDesiredNumberOfLevels] = useState(12)
          
@@ -275,14 +301,14 @@
            if (!hostLocked) {
              setIsHost(newHostStatus)
            } else {
-             console.log('🚫 Host status locked - cannot change from', isHost, 'to', newHostStatus)
+             // console.log('🚫 Host status locked - cannot change from', isHost, 'to', newHostStatus)
            }
          }
          
          // Global host protection - ensure guests can never become host
          const enforceHostProtection = () => {
            if (hostLocked && isHost) {
-             console.log('🚨 GLOBAL HOST PROTECTION: Forcing guest status')
+             // console.log('🚨 GLOBAL HOST PROTECTION: Forcing guest status')
              setIsHost(false)
            }
          }
@@ -290,7 +316,7 @@
          // Host status change protection
          useEffect(() => {
            if (hostLocked && isHost) {
-             console.log('🚨 HOST STATUS CHANGE PROTECTION: Detected unauthorized host change')
+             // console.log('🚨 HOST STATUS CHANGE PROTECTION: Detected unauthorized host change')
              setIsHost(false)
            }
          }, [isHost, hostLocked])
@@ -305,7 +331,7 @@
                if (snapshot.exists()) {
                  const existingHostId = snapshot.val()
                  if (existingHostId !== deviceId) {
-                   console.log('🚨 FORCE HOST CHECK: Setting correct host status')
+                   // console.log('🚨 FORCE HOST CHECK: Setting correct host status')
                    setHostId(existingHostId)
                    setProtectedHost(false)
                    setHostLocked(true)
@@ -337,7 +363,7 @@
          const getCurrentRoomId = () => {
            const currentId = window.roomId || roomId
            if (!currentId) {
-             console.warn('⚠️ No room ID available')
+             // console.warn('⚠️ No room ID available')
            }
            return currentId
          }
@@ -346,7 +372,7 @@
            try {
              const currentRoomId = getCurrentRoomId()
              if (!currentRoomId) {
-               console.warn('⚠️ No room ID available, skipping sync')
+               // console.warn('⚠️ No room ID available, skipping sync')
                return
              }
              
@@ -371,27 +397,52 @@
                ratioInput,
                hostId,
                lastUpdated: Date.now(),
-               updatedBy: deviceId // Use device ID instead of 'local' for better tracking
-             }
+              updatedBy: deviceId, // Use device ID instead of 'local' for better tracking
+              // Ensure eliminatedIds is always included, even if empty
+              eliminatedIds: Array.isArray(gameData.eliminatedIds) ? gameData.eliminatedIds : []
+            }
              
-             console.log('🔄 Syncing to room:', currentRoomId, 'with data:', fullGameState)
-             console.log('📤 Firebase sync details:', {
-               roomId: currentRoomId,
-               updatedBy: fullGameState.updatedBy,
-               rebuyCounts: fullGameState.rebuyCounts,
-               eliminatedIds: fullGameState.eliminatedIds,
-               timestamp: fullGameState.lastUpdated
-             })
+            // console.log('🔥 FIREBASE SYNC: eliminatedIds being sent:', JSON.stringify(fullGameState.eliminatedIds))
+            // console.log('🔥 FIREBASE SYNC: eliminatedIds type:', typeof fullGameState.eliminatedIds)
+            // console.log('🔥 FIREBASE SYNC: eliminatedIds isArray:', Array.isArray(fullGameState.eliminatedIds))
+            // console.log('🔥 FIREBASE SYNC: eliminatedIds length:', fullGameState.eliminatedIds?.length)
+            
+            // CRITICAL DEBUG: Who is sending empty eliminatedIds?
+            if (fullGameState.eliminatedIds.length === 0) {
+              // console.log('🚨🚨🚨 WARNING: EMPTY eliminatedIds being sent to Firebase!')
+              // console.log('🚨🚨🚨 Input gameData.eliminatedIds was:', JSON.stringify(gameData.eliminatedIds))
+              // console.log('🚨🚨🚨 Call stack - WHO called syncGameState with empty eliminatedIds:')
+              // const stack = new Error().stack.split('\n').slice(1, 8)
+              // stack.forEach((line, index) => {
+              //   console.log(`🚨🚨🚨 [${index}] ${line.trim()}`)
+              // })
+              // console.log('🔥 FIREBASE SYNC: Sending EMPTY eliminatedIds - clearing all eliminations')
+            } else {
+              // console.log('🔥 FIREBASE SYNC: Sending eliminations for players:', fullGameState.eliminatedIds)
+            }
+            // console.log('🚨🚨🚨 FIREBASE: Complete sync data:', {
+            //    roomId: currentRoomId,
+            //    updatedBy: fullGameState.updatedBy,
+            //   deviceId: deviceId,
+            //   updatedByMatchesDeviceId: fullGameState.updatedBy === deviceId,
+            //    eliminatedIds: fullGameState.eliminatedIds,
+            //   eliminatedIdsType: typeof fullGameState.eliminatedIds,
+            //   eliminatedIdsArray: Array.isArray(fullGameState.eliminatedIds),
+            //   eliminatedIdsLength: fullGameState.eliminatedIds?.length,
+            //    timestamp: fullGameState.lastUpdated
+            //  })
+            // console.log('🚨🚨🚨 FIREBASE: WRITING TO FIREBASE NOW...')
              gameStateRef.set(fullGameState)
+            // console.log('🚨🚨🚨 FIREBASE: WRITE COMPLETE!')
            } catch (error) {
-             console.error('❌ Error syncing to Firebase:', error)
+             // console.error('❌ Error syncing to Firebase:', error)
            }
          }
          
          const listenToGameUpdates = () => {
            const currentRoomId = getCurrentRoomId()
            if (!currentRoomId) {
-             console.log('⚠️ No room ID available for listener')
+             // console.log('⚠️ No room ID available for listener')
              return
            }
            
@@ -399,7 +450,7 @@
            const existingRef = database.ref(`rooms/${currentRoomId}/gameState`)
            existingRef.off()
            
-           console.log('🎧 Setting up listener for room:', currentRoomId)
+           // console.log('🎧 Setting up listener for room:', currentRoomId)
            const gameStateRef = database.ref(`rooms/${currentRoomId}/gameState`)
            gameStateRef.on('value', (snapshot) => {
              const data = snapshot.val()
@@ -413,41 +464,67 @@
                
                // If this device thinks it's host but shouldn't be, log it
                if (isHost && !shouldBeHost) {
-                 console.log('🚨 HOST OVERRIDE: This device was incorrectly host, now corrected to guest')
+                 // console.log('🚨 HOST OVERRIDE: This device was incorrectly host, now corrected to guest')
                }
                
-               console.log('👑 Host status updated:', correctHostId, 'This device is host:', shouldBeHost)
+               // console.log('👑 Host status updated:', correctHostId, 'This device is host:', shouldBeHost)
              }
              
              // Process ALL updates, but be smart about preventing infinite loops
              if (data) {
                const isFromThisDevice = data.updatedBy === deviceId
                
-               // Log all updates for debugging
-               console.log('🔄 Database update received:', {
-                 updatedBy: data.updatedBy,
-                 isFromThisDevice,
-                 deviceId
-               })
+               // Log database updates
+               if (data.eliminatedIds !== undefined && Array.isArray(data.eliminatedIds) && data.eliminatedIds.length > 0) {
+                 // console.log('🔥 GUEST SYNC: Database update with eliminations:', data.eliminatedIds)
+               }
                
                // Update local state with ALL changes (except host status which is handled above)
                if (!isFromThisDevice) {
-                 console.log('✅ Processing update from:', data.updatedBy)
+                 // console.log('🔥 GUEST SYNC: Processing update from:', data.updatedBy)
                  
                  // Update local state with remote changes
                  setLastUpdateTime(data.lastUpdated)
                  
-                 // Core game state
+                 // Core game state - players array is the source of truth
                  if (data.players) {
-                   console.log('🔄 Updating players:', data.players)
+                   // console.log('🚨🚨🚨 GUEST: RECEIVED PLAYER ARRANGEMENT from Firebase:', data.players)
                    setPlayers(data.players)
+                   // Set numPlayers to match the received players array (this is the authoritative count)
+                   setNumPlayers(data.players.length)
+                   // console.log('🚨🚨🚨 GUEST: Setting numPlayers to match players array length:', data.players.length)
+                 } else if (data.numPlayers !== undefined && data.numPlayers !== numPlayers) {
+                   // Only update numPlayers if we didn't receive a players array and the count actually changed
+                   // console.log('🚨🚨🚨 GUEST: RECEIVED numPlayers from Firebase (no players array):', data.numPlayers)
+                   setNumPlayers(data.numPlayers)
                  }
-                 if (data.eliminatedIds) {
-                   console.log('🔄 Updating eliminated IDs:', data.eliminatedIds, 'from:', data.updatedBy)
-                   setEliminatedIds(data.eliminatedIds)
-                 }
+               // Process eliminatedIds from Firebase
+               // console.log('🔥 GUEST SYNC: Received eliminatedIds:', JSON.stringify(data.eliminatedIds), 'Current:', JSON.stringify(eliminatedIds))
+               
+               // Firebase might convert empty arrays to null/undefined, so handle all cases
+               let newEliminatedIds = [];
+               
+               if (Array.isArray(data.eliminatedIds)) {
+                 newEliminatedIds = data.eliminatedIds;
+                 // console.log('🔥 GUEST SYNC: Using Firebase eliminatedIds array:', JSON.stringify(newEliminatedIds))
+               } else if (data.eliminatedIds === null || data.eliminatedIds === undefined) {
+                 // Firebase converted empty array [] to null/undefined
+                 // This is a legitimate sync operation - host cleared all eliminations
+                 newEliminatedIds = [];
+                 // console.log('🔥 GUEST SYNC: Firebase null/undefined → empty array (host cleared eliminations)')
+               } else {
+                 // console.warn('🔥 GUEST SYNC: Unexpected eliminatedIds format:', data.eliminatedIds)
+                 newEliminatedIds = []; // Default to empty array for safety
+               }
+               
+               // ALWAYS update eliminatedIds from Firebase to ensure proper sync
+               // Firebase's array conversion requires forced updates
+               // console.log('🔥 GUEST SYNC: FORCING eliminatedIds update FROM:', JSON.stringify(eliminatedIds), 'TO:', JSON.stringify(newEliminatedIds))
+               // console.log('🔥 GUEST SYNC: Arrays equal?', JSON.stringify(newEliminatedIds) === JSON.stringify(eliminatedIds))
+               // console.log('🔥 GUEST SYNC: Force updating anyway due to Firebase array conversion issues')
+               setEliminatedIds(newEliminatedIds)
                  if (data.rebuyCounts) {
-                   console.log('🔄 Updating rebuy counts:', data.rebuyCounts, 'from:', data.updatedBy)
+                   // console.log('🔄 Updating rebuy counts:', data.rebuyCounts, 'from:', data.updatedBy)
                    setRebuyCounts(data.rebuyCounts)
                  }
                  if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
@@ -461,8 +538,7 @@
                  if (data.spotifyUrl !== undefined) setSpotifyUrl(data.spotifyUrl)
                  if (data.currentTrack !== undefined) setCurrentTrack(data.currentTrack)
                  
-                 // Tournament settings
-                 if (data.numPlayers !== undefined) setNumPlayers(data.numPlayers)
+                 // Tournament settings (other than numPlayers which is handled above)
                  if (data.maxRebuys !== undefined) setMaxRebuys(data.maxRebuys)
                  if (data.addonTime !== undefined) setAddonTime(data.addonTime)
                  if (data.numWinners !== undefined) setNumWinners(data.numWinners)
@@ -481,8 +557,10 @@
                  // Prize calculator
                  if (data.prizePool !== undefined) setPrizePool(data.prizePool)
                  if (data.ratioInput !== undefined) setRatioInput(data.ratioInput)
+                 
+                 console.log('🔥 GUEST SYNC: Processing complete')
                } else {
-                 console.log('⏭️ Skipping update from this device to prevent infinite loop')
+                 console.log('🔥 GUEST SYNC: Skipping own update from device:', data.updatedBy)
                }
              }
            })
@@ -586,11 +664,22 @@
                
                // Update ALL game state variables
                if (data.players) {
+                console.log('🎮 Setting players from room data:', data.players)
                  setPlayers(data.players)
-                 // Also update numPlayers to match the players array length
+                // Set numPlayers to match the players array length (players array is authoritative)
                  setNumPlayers(data.players.length)
-               }
-               if (data.eliminatedIds) setEliminatedIds(data.eliminatedIds)
+                console.log('🎮 Setting numPlayers to match players array:', data.players.length)
+              }
+               // Handle eliminatedIds from Firebase (may be array, null, or undefined)
+              console.log('🎮 Joining room - processing eliminatedIds:', data.eliminatedIds)
+              let roomEliminatedIds = [];
+              if (Array.isArray(data.eliminatedIds)) {
+                roomEliminatedIds = data.eliminatedIds;
+              } else if (data.eliminatedIds === null || data.eliminatedIds === undefined) {
+                roomEliminatedIds = []; // Default to empty array
+              }
+              console.log('🎮 Setting eliminatedIds to:', roomEliminatedIds)
+              setEliminatedIds(roomEliminatedIds)
                if (data.rebuyCounts) setRebuyCounts(data.rebuyCounts)
                if (data.currentLevelIndex !== undefined) setCurrentLevelIndex(data.currentLevelIndex)
                if (data.remainingSeconds !== undefined) setRemainingSeconds(data.remainingSeconds)
@@ -637,6 +726,8 @@
                
                console.log(`🎮 Joined room ${newRoomId} successfully!`)
                setIsJoiningRoom(false) // Reset joining flag
+              
+              console.log('🎮 Room join processing complete')
                
                // Set up the listener for ongoing updates in this room
                listenToGameUpdates()
@@ -973,8 +1064,8 @@
              out: 'יצא',
              in: 'בפנים',
              locked: 'נעול',
-             rebuys: 'רכישות חוזרות:',
-             maxReached: 'מקסימום הגיע',
+             rebuys: 'רכישות חוזרות',
+             maxReached: 'מקסימום רכישות חוזרות',
              seatingLocked: 'ישיבה נעולה',
              playerControlsLocked: 'בקרות השחקנים ייפתחו כאשר תתחיל את המשחק ותנעול את הגדרות הטורניר',
              applySettings: 'החל הגדרות',
@@ -1026,20 +1117,6 @@
              chip: 'שבב',
              addonBreakReset: 'אפס מצב הפסקת Addon',
              lockedUntilGameStarts: 'נעול עד תחילת המשחק',
-             testAddonBreak: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystem: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakHelper: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelper: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText2: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText3: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText4: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText5: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText6: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText7: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText8: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText9: 'בדוק מערכת הפסקת Addon',
-             testAddonBreakSystemHelperText10: 'בדוק מערכת הפסקת Addon',
              enterPasswordForNewGame: 'הכנס סיסמה למשחק חדש:',
              enterPasswordForSavedGame: 'הכנס סיסמה למשחק השמור:',
              newGameReady: 'משחק חדש מוכן! הכנס סיסמה כדי להתחיל.',
@@ -1047,7 +1124,6 @@
              confirmClearSavedGame: 'האם אתה בטוח שברצונך לנקות את המשחק השמור? לא ניתן לבטל פעולה זו.',
              confirmResetPlayers: 'האם אתה בטוח שברצונך לאפס את כל השחקנים? זה ינקה שמות, רכישות חוזרות וסטטוס חיסול.',
              confirmResetAddonBreak: 'האם אתה בטוח שברצונך לאפס את מצב הפסקת Addon? זה יאפשר להפעיל מחדש את הפסקת Addon.',
-             confirmTestAddonBreak: 'האם אתה בטוח שברצונך לבדוק את מערכת הפסקת Addon? זה יאתחל הפסקה של 15 דקות.',
              incorrectPassword: 'סיסמה שגויה!',
              errorReadingSavedGame: 'שגיאה בקריאת המשחק השמור',
              pleaseEnterValidSpotifyUrl: 'אנא הכנס כתובת Spotify תקינה',
@@ -1250,20 +1326,6 @@
              chip: 'chip',
              addonBreakReset: 'Reset Addon Break',
              lockedUntilGameStarts: 'Locked until game starts',
-             testAddonBreak: 'Test Addon Break',
-             testAddonBreakSystem: 'Test Addon Break System',
-             testAddonBreakHelper: 'Test Addon Break',
-             testAddonBreakSystemHelper: 'Test Addon Break System',
-             testAddonBreakSystemHelperText: 'Test Addon Break System',
-             testAddonBreakSystemHelperText2: 'Test Addon Break System',
-             testAddonBreakSystemHelperText3: 'Test Addon Break System',
-             testAddonBreakSystemHelperText4: 'Test Addon Break System',
-             testAddonBreakSystemHelperText5: 'Test Addon Break System',
-             testAddonBreakSystemHelperText6: 'Test Addon Break System',
-             testAddonBreakSystemHelperText7: 'Test Addon Break System',
-             testAddonBreakSystemHelperText8: 'Test Addon Break System',
-             testAddonBreakSystemHelperText9: 'Test Addon Break System',
-             testAddonBreakSystemHelperText10: 'Test Addon Break System',
              enterPasswordForNewGame: 'Enter password for new game:',
              enterPasswordForSavedGame: 'Enter password for saved game:',
              newGameReady: 'New game ready! Enter password to start.',
@@ -1271,7 +1333,6 @@
              confirmClearSavedGame: 'Are you sure you want to clear the saved game? This cannot be undone.',
              confirmResetPlayers: 'Are you sure you want to reset all players? This will clear names, rebuys, and eliminated status.',
              confirmResetAddonBreak: 'Are you sure you want to reset the addon break state? This will allow the addon break to trigger again.',
-             confirmTestAddonBreak: 'Are you sure you want to test the addon break system? This will start a 15-minute break.',
              incorrectPassword: 'Incorrect password!',
              errorReadingSavedGame: 'Error reading saved game',
              pleaseEnterValidSpotifyUrl: 'Please enter a valid Spotify URL',
@@ -1412,54 +1473,50 @@
          }
          
          function toggleEliminated(id) {
-           console.log('🔄 Toggling elimination for player', id, 'current eliminated:', eliminatedIds)
-           
-           // Calculate the new eliminated IDs first
-           const newEliminatedIds = eliminatedIds.includes(id) 
-             ? eliminatedIds.filter(x => x !== id) 
-             : [...eliminatedIds, id]
-           
-           console.log('📊 New eliminated IDs:', newEliminatedIds)
-           
-           // Update local state
-           setEliminatedIds(newEliminatedIds)
-           
-           // Sync game state to Firebase with the NEW eliminated IDs
-           syncGameState({
-             isRunning,
-             gameStarted,
-             players,
-             eliminatedIds: newEliminatedIds, // Use the calculated new value
-             rebuyCounts,
-             currentLevelIndex,
-             remainingSeconds,
-             breakSeconds,
-             isOnBreak,
-             addonBreakTriggered,
-             addonBreakPending,
-             spotifyUrl,
-             currentTrack
-           })
-           
-           console.log('📤 Elimination sync sent to Firebase:', {
-             playerId: id,
-             oldEliminatedIds: eliminatedIds,
-             newEliminatedIds: newEliminatedIds,
-             action: eliminatedIds.includes(id) ? 'uneliminated' : 'eliminated'
-           })
+          const action = eliminatedIds.includes(id) ? 'UNELIMINATING' : 'ELIMINATING'
+          console.log('🔥 HOST TOGGLE:', action, 'player', id)
+          
+          // Calculate the new eliminated IDs
+          const newEliminatedIds = eliminatedIds.includes(id) 
+            ? eliminatedIds.filter(x => x !== id) 
+            : [...eliminatedIds, id]
+          
+          console.log('🔥 HOST TOGGLE: eliminatedIds:', JSON.stringify(eliminatedIds), '→', JSON.stringify(newEliminatedIds))
+          
+          // Update React state first  
+          setEliminatedIds(newEliminatedIds)
+          
+          // Then immediately sync to Firebase
+          setTimeout(() => {
+            console.log('🔥 HOST TOGGLE: Syncing to Firebase with eliminatedIds:', JSON.stringify(newEliminatedIds))
+            syncGameState({
+              isRunning,
+              gameStarted,
+              players,
+              eliminatedIds: newEliminatedIds,
+              rebuyCounts,
+              currentLevelIndex,
+              remainingSeconds,
+              breakSeconds,
+              isOnBreak,
+              addonBreakTriggered,
+              addonBreakPending,
+              spotifyUrl,
+              currentTrack
+            })
+          }, 100) // Small delay to ensure state update completes
          }
          
          function addRebuy(id) {
-            const currentRebuys = rebuyCounts[id] || 0
+            // Use functional state update to ensure we always work with the latest state
+            setRebuyCounts(currentRebuyCounts => {
+              const currentRebuys = currentRebuyCounts[id] || 0
             if (currentRebuys < maxRebuys) {
               console.log('🔄 Adding rebuy for player', id, 'current:', currentRebuys, 'max:', maxRebuys)
               
-              // Calculate new rebuy counts first
-              const newRebuyCounts = { ...rebuyCounts, [id]: currentRebuys + 1 }
+                // Calculate new rebuy counts based on current state
+                const newRebuyCounts = { ...currentRebuyCounts, [id]: currentRebuys + 1 }
               console.log('📊 New rebuy counts:', newRebuyCounts)
-              
-              // Update local state
-              setRebuyCounts(newRebuyCounts)
               
               // Sync game state to Firebase with the NEW rebuy counts
               syncGameState({
@@ -1484,22 +1541,25 @@
                 newRebuys: newRebuyCounts[id],
                 action: 'added'
               })
+                
+                return newRebuyCounts
             } else {
               console.log('🚫 Cannot add rebuy - max reached for player', id)
+                return currentRebuyCounts // Return unchanged state
             }
+            })
          }
          
          function removeRebuy(id) {
-           const currentRebuys = rebuyCounts[id] || 0
+           // Use functional state update to ensure we always work with the latest state
+           setRebuyCounts(currentRebuyCounts => {
+             const currentRebuys = currentRebuyCounts[id] || 0
            if (currentRebuys > 0) {
              console.log('🔄 Removing rebuy for player', id, 'current:', currentRebuys)
              
-             // Calculate new rebuy counts first
-             const newRebuyCounts = { ...rebuyCounts, [id]: Math.max(0, currentRebuys - 1) }
+               // Calculate new rebuy counts based on current state
+               const newRebuyCounts = { ...currentRebuyCounts, [id]: Math.max(0, currentRebuys - 1) }
              console.log('📊 New rebuy counts:', newRebuyCounts)
-             
-             // Update local state
-             setRebuyCounts(newRebuyCounts)
              
              // Sync game state to Firebase with the NEW rebuy counts
              syncGameState({
@@ -1524,9 +1584,13 @@
                newRebuys: newRebuyCounts[id],
                action: 'removed'
              })
+               
+               return newRebuyCounts
            } else {
              console.log('🚫 Cannot remove rebuy - already at 0 for player', id)
+               return currentRebuyCounts // Return unchanged state
            }
+           })
          }
          
          function updatePlayerName(index, name) {
@@ -1565,6 +1629,9 @@
              return
            }
            
+           console.log('🚨 SEAT RANDOM CALLED - preserving eliminatedIds:', JSON.stringify(eliminatedIds))
+           console.log('🚨 SEAT RANDOM STACK TRACE:', new Error().stack.split('\n').slice(1, 5).join('\n'))
+           
            // Generate the new seating arrangement
            let newPlayers
            if (players.length !== numPlayers) {
@@ -1584,7 +1651,8 @@
            // Update local state
            setPlayers(newPlayers)
             setRebuyCounts({})
-            setEliminatedIds([])
+            // Don't reset eliminations when shuffling seats - preserve player status
+            console.log('🚨 SEAT RANDOM: Preserving eliminatedIds:', JSON.stringify(eliminatedIds))
            
            // Sync game state to Firebase immediately with the new seating
            setTimeout(() => {
@@ -1592,7 +1660,7 @@
                isRunning,
                gameStarted,
                players: newPlayers,
-               eliminatedIds: [],
+               eliminatedIds, // Preserve current eliminations
                rebuyCounts: {},
                currentLevelIndex,
                remainingSeconds,
@@ -1607,12 +1675,15 @@
           }
           
           function resetPlayers() {
+            console.log('🚨 RESET PLAYERS CALLED - This will clear eliminatedIds!', JSON.stringify(eliminatedIds))
+            console.log('🚨 RESET PLAYERS STACK TRACE:', new Error().stack.split('\n').slice(1, 5).join('\n'))
             setPlayers(Array.from({ length: numPlayers }, (_, i) => ({ 
               id: i + 1, 
               name: t.playerPlaceholder(i + 1)
             })))
             setRebuyCounts({})
-            setEliminatedIds([])
+            // Don't automatically reset eliminations - preserve player status
+            console.log('🚨 RESET PLAYERS: Preserving eliminatedIds:', JSON.stringify(eliminatedIds))
             
             // Sync game state to Firebase
             setTimeout(() => {
@@ -1623,7 +1694,7 @@
                   id: i + 1, 
                   name: t.playerPlaceholder(i + 1)
                 })),
-                eliminatedIds: [],
+                eliminatedIds, // Preserve current eliminations
                 rebuyCounts: {},
                 currentLevelIndex,
                 remainingSeconds,
@@ -1686,7 +1757,7 @@
               setRatioInput('50/30/20')
                       setBuyInPrice(50)
         setRebuyPrice(50)
-        setCurrency('USD')
+        setCurrency('NIS')
          setLowestChipValue(25)
          setDesiredNumberOfLevels(12)
               setSpotifyUrl('')
@@ -1752,52 +1823,55 @@
            }
          }
          
-         // Sound functions
-         function playChime() {
-           if (!soundEnabled) return
-           
-           try {
-             // Create a double-beep sound that sounds more like an airport announcement
-             const audioContext = new (window.AudioContext || window.webkitAudioContext)()
-             
-             // First beep (higher pitch)
-             const oscillator1 = audioContext.createOscillator()
-             const gainNode1 = audioContext.createGain()
-             
-             oscillator1.connect(gainNode1)
-             gainNode1.connect(audioContext.destination)
-             
-             oscillator1.frequency.setValueAtTime(1000, audioContext.currentTime) // 1000 Hz
-             oscillator1.type = 'sine'
-             
-             gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime)
-             gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
-             
-             oscillator1.start(audioContext.currentTime)
-             oscillator1.stop(audioContext.currentTime + 0.3)
-             
-             // Second beep (lower pitch, delayed)
-             const oscillator2 = audioContext.createOscillator()
-             const gainNode2 = audioContext.createGain()
-             
-             oscillator2.connect(gainNode2)
-             gainNode2.connect(audioContext.destination)
-             
-             oscillator2.frequency.setValueAtTime(800, audioContext.currentTime + 0.4) // 800 Hz, delayed
-             oscillator2.type = 'sine'
-             
-             gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime + 0.4)
-             gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.7)
-             
-             oscillator2.start(audioContext.currentTime + 0.4)
-             oscillator2.stop(audioContext.currentTime + 0.7)
-             
-           } catch (error) {
-             console.log('Audio playback failed:', error)
-             // Simple fallback alert
-
-           }
-         }
+        // Sound functions
+        function playChime() {
+          if (!soundEnabled) return
+          
+          try {
+            // Play the airport voice announcement
+            const audio = new Audio('Airport.wav')
+            audio.volume = 0.7 // Set comfortable volume level
+            
+            console.log('🔊 Playing airport announcement for level change')
+            
+            // Play the airport voice
+            audio.play().catch(error => {
+              console.log('Airport audio playback failed:', error)
+              // Fallback to simple beep if airport file fails
+              playFallbackBeep()
+            })
+            
+          } catch (error) {
+            console.log('Audio setup failed:', error)
+            playFallbackBeep()
+          }
+        }
+        
+        // Fallback beep function (simple single beep)
+        function playFallbackBeep() {
+          try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+            const oscillator = audioContext.createOscillator()
+            const gainNode = audioContext.createGain()
+            
+            oscillator.connect(gainNode)
+            gainNode.connect(audioContext.destination)
+            
+            oscillator.frequency.setValueAtTime(800, audioContext.currentTime)
+            oscillator.type = 'sine'
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+            
+            oscillator.start(audioContext.currentTime)
+            oscillator.stop(audioContext.currentTime + 0.5)
+            
+            console.log('🔊 Playing fallback beep sound')
+            
+          } catch (error) {
+            console.log('Fallback beep failed:', error)
+          }
+        }
          
                    // Fullscreen functions
           function toggleFullscreen() {
@@ -2299,24 +2373,25 @@
                return prev - 1
                })()
                
-               // Sync game state to Firebase every 10 seconds to avoid too many updates
-               if (newRemainingSeconds % 10 === 0) {
-                 syncGameState({
-                   isRunning,
-                   gameStarted,
-                   players,
-                   eliminatedIds,
-                   rebuyCounts,
-                   currentLevelIndex,
-                   remainingSeconds: newRemainingSeconds,
-                   breakSeconds,
-                   isOnBreak,
-                   addonBreakTriggered,
-                   addonBreakPending,
-                   spotifyUrl,
-                   currentTrack
-                 })
-               }
+               // DISABLED problematic timer sync - was overwriting eliminatedIds every 10 seconds!
+               // Manual syncs in game control functions are sufficient
+               // if (newRemainingSeconds % 10 === 0) {
+               //   syncGameState({
+               //     isRunning,
+               //     gameStarted,
+               //     players,
+               //     eliminatedIds, // This was causing the empty eliminatedIds problem!
+               //     rebuyCounts,
+               //     currentLevelIndex,
+               //     remainingSeconds: newRemainingSeconds,
+               //     breakSeconds,
+               //     isOnBreak,
+               //     addonBreakTriggered,
+               //     addonBreakPending,
+               //     spotifyUrl,
+               //     currentTrack
+               //   })
+               // }
                
                return newRemainingSeconds
              })
@@ -2442,16 +2517,38 @@
             return () => clearInterval(displayInterval)
           }, [addonTime])
          
-                   // Save game state to localStorage whenever important state changes
-          useEffect(() => {
-            // Don't auto-save when on the start screen (app not unlocked)
+                   // Save game state to localStorage with debouncing and safeguards
+          const debouncedAutoSave = useMemo(() => {
+            let timeoutId = null
+            return () => {
+              if (timeoutId) clearTimeout(timeoutId)
+              timeoutId = setTimeout(() => {
             if (!isAppUnlocked) {
               console.log('🔍 Auto-save skipped - app not unlocked')
               return
             }
             
-            console.log('🔍 Auto-save effect running with numPlayers:', numPlayers)
-            console.log('🔍 Current localStorage before auto-save:', localStorage.getItem('pokerTournamentState'))
+                // Get current saved state to preserve important data
+                const currentSaved = localStorage.getItem('pokerTournamentState')
+                let preservedEliminatedIds = []
+                
+                if (currentSaved) {
+                  try {
+                    const parsed = JSON.parse(currentSaved)
+                    if (Array.isArray(parsed.eliminatedIds)) {
+                      preservedEliminatedIds = parsed.eliminatedIds
+                    }
+                  } catch (error) {
+                    console.error('Error parsing saved state:', error)
+                  }
+                }
+                
+                // Get CURRENT state values, not from closure
+                const currentEliminatedIds = setEliminatedIdsOriginal.current || eliminatedIds
+                
+                console.log('💾 DEBOUNCED AUTO-SAVE: Closure eliminatedIds:', JSON.stringify(eliminatedIds))
+                console.log('💾 DEBOUNCED AUTO-SAVE: Preserved eliminatedIds:', JSON.stringify(preservedEliminatedIds))
+                console.log('💾 DEBOUNCED AUTO-SAVE: Using current eliminatedIds')
             
             const gameState = {
               isRunning,
@@ -2469,7 +2566,7 @@
               autoBreakMinutes,
               numPlayers,
               players,
-              eliminatedIds,
+              eliminatedIds, // Use current eliminatedIds from closure (should be current due to useMemo deps)
               rebuyCounts,
               levels,
               maxRebuys,
@@ -2485,32 +2582,118 @@
            userDefaultLevels,
               spotifyUrl,
               currentTrack,
-              savedAt: Date.now() // Add timestamp for tracking
+                  savedAt: Date.now()
             }
             
             localStorage.setItem('pokerTournamentState', JSON.stringify(gameState))
+                console.log('💾 DEBOUNCED AUTO-SAVE: SAVED with eliminatedIds:', JSON.stringify(finalEliminatedIds))
+              }, 500) // 500ms debounce
+            }
+          }, [isAppUnlocked, isRunning, gameStarted, eliminatedIds, players, rebuyCounts])
+          
+          // Safe auto-save - saves game without interfering with Firebase sync
+          useEffect(() => {
+            if (!isAppUnlocked) return
+            
+            // Simple, immediate save without debouncing to avoid closure issues
+            const gameState = {
+              isRunning,
+              gameStarted,
+              currentLevelIndex,
+              remainingSeconds,
+              minutesPerLevel,
+              timeFormat,
+              timePerLevelMMSS,
+              elapsedSeconds,
+              breakSeconds,
+              isOnBreak,
+              addonBreakTriggered,
+              addonBreakPending,
+              autoBreakMinutes,
+              numPlayers,
+              players,
+              eliminatedIds, // Current eliminatedIds - no complex logic
+              rebuyCounts,
+              levels,
+              maxRebuys,
+              addonTime,
+              numWinners,
+              prizePool,
+              ratioInput,
+              buyInPrice,
+              rebuyPrice,
+              currency,
+              lowestChipValue,
+              desiredNumberOfLevels,
+              userDefaultLevels,
+              spotifyUrl,
+              currentTrack,
+              savedAt: Date.now()
+            }
+            
+            localStorage.setItem('pokerTournamentState', JSON.stringify(gameState))
+            console.log('💾 SAFE AUTO-SAVE: Game saved with eliminatedIds:', JSON.stringify(eliminatedIds))
           }, [
-            isAppUnlocked, isRunning, gameStarted, currentLevelIndex, remainingSeconds, minutesPerLevel,
-            timeFormat, timePerLevelMMSS, elapsedSeconds, breakSeconds, isOnBreak, addonBreakTriggered, addonBreakPending, autoBreakMinutes,
-            numPlayers, players, eliminatedIds, rebuyCounts, levels,
-            maxRebuys, addonTime, numWinners, prizePool, ratioInput, buyInPrice, rebuyPrice, currency, lowestChipValue, desiredNumberOfLevels, userDefaultLevels, spotifyUrl, currentTrack
+            // Only save on major game changes, not on every state update
+            isAppUnlocked, gameStarted, currentLevelIndex, numPlayers, players.length,
+            eliminatedIds, rebuyCounts, levels.length
           ])
+          
+          // Separate periodic save for timer states (every 10 seconds when running)
+          useEffect(() => {
+            if (!isAppUnlocked || !isRunning) return
+            
+            const timerSaveInterval = setInterval(() => {
+              const currentState = localStorage.getItem('pokerTournamentState')
+              if (currentState) {
+                try {
+                  const gameState = JSON.parse(currentState)
+                  // Update only timer-related fields in the existing saved state
+                  gameState.remainingSeconds = remainingSeconds
+                  gameState.elapsedSeconds = elapsedSeconds  
+                  gameState.breakSeconds = breakSeconds
+                  gameState.savedAt = Date.now()
+                  
+                  // NEVER overwrite eliminatedIds in timer save - preserve whatever is there
+                  console.log('⏰ TIMER-SAVE: Preserving eliminatedIds:', JSON.stringify(gameState.eliminatedIds))
+                  
+                  localStorage.setItem('pokerTournamentState', JSON.stringify(gameState))
+                  console.log('⏰ TIMER-SAVE: Timer states updated, eliminatedIds preserved')
+                } catch (error) {
+                  console.error('Error updating timer states:', error)
+                }
+              }
+            }, 10000) // Save timer states every 10 seconds
+            
+            return () => clearInterval(timerSaveInterval)
+          }, [isAppUnlocked, isRunning, remainingSeconds, elapsedSeconds, breakSeconds])
+          
+          // REMOVED useEffect Firebase sync - was causing loops
           
           // Player count effect - handle dynamic player count changes
           useEffect(() => {
+           console.log('🧩 useEffect: numPlayers changed to:', numPlayers, 'current players.length:', players.length)
+           
+           // Only adjust players array if the count actually differs and we need to create a local arrangement
+           if (players.length !== numPlayers) {
+             console.log('🧩 useEffect: Players count mismatch - creating local arrangement')
+             
             const savedState = localStorage.getItem('pokerTournamentState')
             if (!savedState) {
               // Only create default players if no saved state exists
+               console.log('🧩 useEffect: No saved state - creating default players')
            setPlayers(Array.from({ length: numPlayers }, (_, i) => ({ 
              id: i + 1, 
              name: t.playerPlaceholder(i + 1)
            })))
-              setRebuyCounts({})
-              setEliminatedIds([])
+               // Only reset eliminated/rebuy data if we don't have any current data AND no saved state
+               if (Object.keys(rebuyCounts).length === 0) setRebuyCounts({})
+               // Never reset eliminatedIds in useEffect - preserve player elimination status
+               console.log('🧩 useEffect: Preserving current eliminatedIds:', JSON.stringify(eliminatedIds))
             } else {
               // If we have saved state but numPlayers changed, update players array
+               console.log('🧩 useEffect: Saved state exists - adjusting players array')
               setPlayers(prevPlayers => {
-                if (prevPlayers.length !== numPlayers) {
                   // Create new players array with correct length
                   const newPlayers = Array.from({ length: numPlayers }, (_, i) => {
                     // Try to preserve existing player data if possible
@@ -2524,14 +2707,16 @@
                       }
                     }
                   })
+                 console.log('🧩 useEffect: Created new player arrangement:', newPlayers)
                   return newPlayers
-                }
-                return prevPlayers
               })
               // DON'T reset rebuy counts and eliminated status when player count changes
               // This preserves the saved state
             }
-         }, [numPlayers, t.playerPlaceholder])
+           } else {
+             console.log('🧩 useEffect: Players count matches - no action needed')
+           }
+        }, [numPlayers, t.playerPlaceholder, players.length])
          
          // Language effect
          useEffect(() => {
@@ -2611,18 +2796,18 @@
             {/* Room Info Header */}
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6">
               <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-4">
-                  <div className="bg-green-600 px-3 py-2 rounded-lg text-sm">
-                    <span data-room-id>Room: {roomId}</span>
-                  </div>
-                  <div id="connectionStatus" className="bg-green-600 px-3 py-2 rounded-lg text-sm">
-                    <span>Connected</span>
-                  </div>
+                <div className="flex items-center gap-4">
                   {isHost && (
                     <div className="bg-amber-600 px-3 py-2 rounded-lg text-sm">
                       <span>👑 Host</span>
                     </div>
                   )}
+                  <div id="connectionStatus" className="bg-green-600 px-3 py-2 rounded-lg text-sm">
+                    <span>Connected</span>
+                  </div>
+                  <div className="bg-green-600 px-3 py-2 rounded-lg text-sm">
+                    <span data-room-id>Room: {roomId}</span>
+                  </div>
                 </div>
                 <div className="text-slate-400 text-sm">
                   {lang === 'he' ? 'שתף קוד חדר זה עם שחקנים אחרים כדי להצטרף לאותו משחק' : 'Share this room code with other players to join the same game'}
@@ -2904,66 +3089,152 @@
              {/* App Content - Only show when unlocked */}
              {isAppUnlocked && (
                <>
-                                {/* Instructions Banner */}
-               <div className="bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+             {/* How to Use Section - Only shown when Help button is clicked */}
+            {showHowToUse && (
+              <div className="bg-gradient-to-r from-blue-600/20 to-indigo-600/20 border border-blue-500/30 rounded-xl p-4 mb-6">
+                {/* Header with close button */}
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">📚</span>
+                    <h3 className="text-blue-200 font-semibold text-lg">{t.howToUse}</h3>
+                  </div>
+                  <button
+                    onClick={() => setShowHowToUse(false)}
+                    className="text-blue-200 hover:text-blue-100 transition-colors p-1 rounded"
+                    title={lang === 'he' ? 'סגור' : 'Close'}
+                  >
+                    <span className="text-xl">❌</span>
+                  </button>
+                </div>
 
+                {/* Content */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-blue-100 text-sm mb-4">
+                  <div>
+                    <div className="font-medium mb-1">🏆 {t.tournamentTab}:</div>
+                    <div className="text-blue-200">{t.tournamentTabDesc1}</div>
+                    <div className="text-blue-200">{t.tournamentTabDesc2}</div>
+                    <div className="text-blue-200">{t.tournamentTabDesc3}</div>
+                    <div className="text-blue-200">• {lang === 'he' 
+                      ? 'השתמש בכפתור "התחל משחק" כדי לנעול הגדרות הטורניר'
+                      : 'Use "Start Game" button to lock tournament settings'
+                    }</div>
+                  </div>
+                  <div>
+                    <div className="font-medium mb-1">💰 {t.prizeCalculator}:</div>
+                    <div className="text-blue-200">{t.prizeCalculatorDesc1}</div>
+                    <div className="text-blue-200">{t.prizeCalculatorDesc2}</div>
+                    <div className="text-blue-200">{t.prizeCalculatorDesc3}</div>
+                  </div>
+                  <div>
+                    <div className="font-medium mb-1">⚙️ {t.adminSettings}:</div>
+                    <div className="text-blue-200">{t.adminSettingsDesc1}</div>
+                    <div className="text-blue-200">{t.adminSettingsDesc2}</div>
+                    <div className="text-blue-200">{t.adminSettingsDesc3}</div>
+                  </div>
+                  <div>
+                    <div className="font-medium mb-1">🎮 {t.newGame}:</div>
+                    <div className="text-blue-200">{t.newGameDesc1}</div>
+                    <div className="text-blue-200">{t.newGameDesc2}</div>
+                    <div className="text-blue-200">{t.newGameDesc3}</div>
+                  </div>
+                </div>
 
-                 <div className="flex items-center gap-3 mb-2">
-                   <span className="text-2xl">📚</span>
-                   <h3 className="text-blue-200 font-semibold text-lg">{t.howToUse}</h3>
-                 </div>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-blue-100 text-sm">
-                   <div>
-                     <div className="font-medium mb-1">🏆 {t.tournamentTab}:</div>
-                     <div className="text-blue-200">{t.tournamentTabDesc1}</div>
-                     <div className="text-blue-200">{t.tournamentTabDesc2}</div>
-                     <div className="text-blue-200">{t.tournamentTabDesc3}</div>
-                     <div className="text-blue-200">• {lang === 'he' 
-                       ? 'השתמש בכפתור "התחל משחק" כדי לנעול הגדרות הטורניר'
-                       : 'Use "Start Game" button to lock tournament settings'
-                     }</div>
-                   </div>
-                   <div>
-                     <div className="font-medium mb-1">💰 {t.prizeCalculator}:</div>
-                     <div className="text-blue-200">{t.prizeCalculatorDesc1}</div>
-                     <div className="text-blue-200">{t.prizeCalculatorDesc2}</div>
-                     <div className="text-blue-200">{t.prizeCalculatorDesc3}</div>
-                   </div>
-                   <div>
-                     <div className="font-medium mb-1">⚙️ {t.adminSettings}:</div>
-                     <div className="text-blue-200">{t.adminSettingsDesc1}</div>
-                     <div className="text-blue-200">{t.adminSettingsDesc2}</div>
-                     <div className="text-blue-200">{t.adminSettingsDesc3}</div>
-                   </div>
-                   <div>
-                     <div className="font-medium mb-1">🎮 {t.newGame}:</div>
-                     <div className="text-blue-200">{t.newGameDesc1}</div>
-                     <div className="text-blue-200">{t.newGameDesc2}</div>
-                     <div className="text-blue-200">{t.newGameDesc3}</div>
-                   </div>
-                 </div>
-               </div>
+                {/* Permissions & Access Control - Moved from main interface */}
+                <div className="p-3 bg-blue-800/30 rounded-lg border border-blue-500/30 mb-4">
+                  <div className="text-sm font-medium text-blue-200 mb-2">
+                    {lang === 'he' ? 'הרשאות וגישה' : 'Permissions & Access Control'}
+                  </div>
+                  <div className="text-sm text-blue-300 mb-1">
+                    <span className="font-medium">👑 {lang === 'he' ? 'מנהל בלבד:' : 'Host Only:'}</span> {lang === 'he' ? 'התחלת משחק, השהיה/המשך, איפוס טיימר, שליטה בהפסקות' : 'Start Game, Pause/Resume, Reset Timer, Break Controls'}
+                  </div>
+                  <div className="text-sm text-blue-300">
+                    <span className="font-medium">✅ {lang === 'he' ? 'כל השחקנים:' : 'All Players:'}</span> {lang === 'he' ? 'רכישות חוזרות, חיסולים, שמות שחקנים (לפני תחילת המשחק)' : 'Rebuys, Eliminations, Player Names (before game starts)'}
+                  </div>
+                </div>
+
+                {/* Connection Status - Moved from main interface */}
+                <div className="p-3 bg-blue-800/30 rounded-lg border border-blue-500/30 mb-4">
+                  <div className="text-sm font-medium text-blue-200 mb-2">
+                    {lang === 'he' ? 'מידע טכני ובדיקות' : 'Technical Info & Testing'}
+                  </div>
+                  <div className="text-sm text-blue-300 mb-1">
+                    <span className="font-medium">🔗 {lang === 'he' ? 'מצב חיבור:' : 'Connection Status:'}</span> {isConnected ? 'Connected' : 'Disconnected'}
+                  </div>
+                  <div className="text-sm text-blue-300 mb-1">
+                    <span className="font-medium">👑 {lang === 'he' ? 'מצב משתמש:' : 'Host Status:'}</span> {isHost ? (lang === 'he' ? 'מנהל' : 'Host') : (lang === 'he' ? 'אורח' : 'Guest')}
+                  </div>
+                  <div className="text-sm text-blue-300 mb-1">
+                    <span className="font-medium">🆔 {lang === 'he' ? 'מזהה מכשיר:' : 'Device ID:'}</span> {deviceId}
+                  </div>
+                  <div className="text-sm text-blue-300 mb-2">
+                    <span className="font-medium">🏠 {lang === 'he' ? 'מזהה חדר:' : 'Room ID:'}</span> {getCurrentRoomId()}
+                  </div>
+                  <button 
+                    className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                    onClick={() => {
+                      console.log('🧪 TEST: Current state:', {
+                        eliminatedIds,
+                        rebuyCounts,
+                        deviceId,
+                        roomId: getCurrentRoomId()
+                      })
+                      // Force a sync to test
+                      syncGameState({
+                        isRunning,
+                        gameStarted,
+                        players,
+                        eliminatedIds,
+                        rebuyCounts,
+                        currentLevelIndex,
+                        remainingSeconds,
+                        breakSeconds,
+                        isOnBreak,
+                        addonBreakTriggered,
+                        addonBreakPending,
+                        spotifyUrl,
+                        currentTrack
+                      })
+                    }}
+                  >
+                    🧪 {lang === 'he' ? 'בדיקת סינכרון' : 'Test Sync'}
+                  </button>
+                </div>
+              </div>
+            )}
              
                           {/* Header */}
              <div className="flex items-center justify-between mb-6">
                <h1 className="text-3xl font-bold text-slate-100">{t.title}</h1>
-               <div className="flex items-center gap-3">
-                                                     <button
-                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors"
-                    onClick={newGame}
-                  >
-                    🃏 {t.newGame}
-                  </button>
+                <div className="flex items-center gap-3">
+                  {/* Help/How to Use button */}
                   <button
-                    className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
-                    onClick={toggleFullscreen}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      showHowToUse 
+                        ? 'bg-blue-600 hover:bg-blue-500 text-white' 
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                    }`}
+                    onClick={() => setShowHowToUse(!showHowToUse)}
+                    title={lang === 'he' ? 'הוראות שימוש' : 'How to Use'}
                   >
-                    {isFullscreen ? `⛶ ${t.exitFullscreen}` : `⛶ ${t.fullscreen}`}
+                    📚 {lang === 'he' ? 'עזרה' : 'Help'}
+                  </button>
+                  
+                  <button
+                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors"
+                   onClick={newGame}
+                 >
+                   🃏 {t.newGame}
                  </button>
                  <button
                    className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
-                   onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
+                   onClick={toggleFullscreen}
                  >
+                   {isFullscreen ? `⛶ ${t.exitFullscreen}` : `⛶ ${t.fullscreen}`}
+                </button>
+                <button
+                  className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium transition-colors"
+                  onClick={() => setLang(lang === 'he' ? 'en' : 'he')}
+                >
                    {lang === 'he' ? 'English' : 'עברית'}
                  </button>
                </div>
@@ -3258,60 +3529,8 @@
                <div className="bg-slate-800/60 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-lg">
                  <h2 className="text-2xl font-semibold text-slate-100 mb-4">{t.tournamentTitle}</h2>
                  
-                 {/* Host vs Guest Permissions */}
-                 <div className="mb-4 p-3 bg-slate-700/30 rounded-lg border border-slate-600">
-                   <div className="text-sm text-slate-300 mb-2">
-                     <span className="font-medium">👑 Host Only:</span> Start Game, Pause/Resume, Reset Timer, Break Controls
-                   </div>
-                   <div className="text-sm text-slate-300">
-                     <span className="font-medium">✅ All Players:</span> Rebuys, Eliminations, Player Names (before game starts)
-                   </div>
-                 </div>
-                 
-                 {/* Connection Test */}
-                 <div className="mb-4 p-3 bg-blue-900/20 rounded-lg border border-blue-600">
-                   <div className="text-sm text-blue-300 mb-2">
-                     <span className="font-medium">🔗 Connection Status:</span> {isConnected ? 'Connected' : 'Disconnected'}
-                   </div>
-                   <div className="text-sm text-blue-300 mb-2">
-                     <span className="font-medium">👑 Host Status:</span> {isHost ? 'Host' : 'Guest'}
-                   </div>
-                   <div className="text-sm text-blue-300 mb-2">
-                     <span className="font-medium">🆔 Device ID:</span> {deviceId}
-                   </div>
-                   <div className="text-sm text-blue-300 mb-2">
-                     <span className="font-medium">🏠 Room ID:</span> {getCurrentRoomId()}
-                   </div>
-                   <button 
-                     className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded"
-                     onClick={() => {
-                       console.log('🧪 TEST: Current state:', {
-                         eliminatedIds,
-                         rebuyCounts,
-                         deviceId,
-                         roomId: getCurrentRoomId()
-                       })
-                       // Force a sync to test
-                       syncGameState({
-                         isRunning,
-                         gameStarted,
-                         players,
-                         eliminatedIds,
-                         rebuyCounts,
-                         currentLevelIndex,
-                         remainingSeconds,
-                         breakSeconds,
-                         isOnBreak,
-                         addonBreakTriggered,
-                         addonBreakPending,
-                         spotifyUrl,
-                         currentTrack
-                       })
-                     }}
-                   >
-                     🧪 Test Sync
-                   </button>
-                 </div>
+               {/* Host vs Guest Permissions - moved to help section */}
+               {/* Connection Test - moved to help section */}
                  
                  {/* Level Settings */}
                   <div className="space-y-4 mb-4">
@@ -4304,30 +4523,6 @@
                            </div>
                          </div>
                          
-                         {/* Test Addon Break Button */}
-                         <div className="space-y-2">
-                           <button
-                             className={`w-full px-4 py-3 rounded-md text-white text-sm font-medium transition-colors ${
-                               gameStarted 
-                                 ? 'bg-green-600 hover:bg-green-500' 
-                                 : 'bg-slate-500 cursor-not-allowed'
-                             }`}
-                             onClick={() => {
-                               if (!gameStarted) return
-                               if (confirm(t.confirmTestAddonBreak)) {
-                                 startBreak(15)
-                                 setAddonBreakTriggered(true)
-                                 setAddonBreakPending(true)
-                               }
-                             }}
-                             disabled={!gameStarted}
-                           >
-                             🧪 {t.testAddonBreak}
-                           </button>
-                           <div className="text-xs text-slate-400 text-center">
-                             {gameStarted ? t.testAddonBreak : t.lockedUntilGameStarts}
-                           </div>
-                         </div>
                        </div>
                      </div>
                   </div>
